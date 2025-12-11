@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Puedes agregar estilos globales extra aquí abajo si necesitas */
+body {
+  background-color: #f1f5f9; /* Un color de fondo suave por defecto */
+}
