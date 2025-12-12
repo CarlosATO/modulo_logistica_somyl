@@ -17,7 +17,7 @@ If you are developing a production application, we recommend using TypeScript wi
 
 
 Para iniciar: 
-cd "/Users/carlosalegria/Desktop/Aplicaciones Carlos Alegria/PORTAL_SOMYL_2026/modulo_logistica"
+cd modulo_logistica
 
 npm run dev
 
