@@ -1,448 +1,502 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from '../services/supabaseClient';
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  Search, Truck, UploadCloud, Plus, Trash2, CheckCircle, 
+  Loader, Building, Calendar, Paperclip 
+} from 'lucide-react';
+import { supabase } from '../services/supabaseClient';           
+import { supabaseProcurement } from '../services/procurementClient'; 
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, CheckCircle, Plus, Trash2, FileText, Truck, HardHat, Warehouse, Calculator, Search, XCircle } from 'lucide-react';
 
-// --- COMPONENTE: BUSCADOR INTELIGENTE DE PRODUCTOS ---
-const ProductCombobox = ({ products, onSelect }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [search, setSearch] = useState('');
-    const wrapperRef = useRef(null);
-
-    // Cerrar al hacer clic fuera
-    useEffect(() => {
-        function handleClickOutside(event) {
-            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
-                setIsOpen(false);
-            }
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, [wrapperRef]);
-
-    // Filtrado en tiempo real
-    const filtered = products.filter(p => 
-        p.name.toLowerCase().includes(search.toLowerCase()) || 
-        p.sku?.toLowerCase().includes(search.toLowerCase())
-    );
-
-    const handleSelect = (product) => {
-        onSelect(product);
-        setSearch(''); // Limpiar buscador
-        setIsOpen(false); // Cerrar lista
-    };
-
-    return (
-        <div className="relative w-full" ref={wrapperRef}>
-            <div className="relative">
-                <Search className="absolute left-3 top-2.5 text-stone-400" size={16} />
-                <input 
-                    className="w-full pl-9 pr-4 py-2 border border-stone-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                    placeholder="Buscar por Nombre o SKU..."
-                    value={search}
-                    onChange={(e) => { setSearch(e.target.value); setIsOpen(true); }}
-                    onFocus={() => setIsOpen(true)}
-                />
-            </div>
-
-            {isOpen && search.length > 0 && (
-                <div className="absolute z-50 w-full bg-white border border-stone-200 shadow-xl max-h-60 overflow-y-auto rounded-b-lg mt-1 animate-fade-in">
-                    {filtered.length === 0 ? (
-                        <div className="p-3 text-xs text-stone-400 italic text-center">No se encontraron productos.</div>
-                    ) : (
-                        filtered.map(p => (
-                            <div 
-                                key={p.id} 
-                                className="p-3 hover:bg-orange-50 cursor-pointer border-b border-stone-50 last:border-0 transition-colors group"
-                                onClick={() => handleSelect(p)}
-                            >
-                                <div className="flex justify-between items-center">
-                                    <span className="font-bold text-stone-800 text-sm group-hover:text-orange-700">{p.name}</span>
-                                    <span className="text-[10px] bg-stone-100 px-1.5 py-0.5 rounded text-stone-500 group-hover:bg-white">{p.unit}</span>
-                                </div>
-                                <div className="text-xs text-stone-400 font-mono mt-0.5 flex gap-2">
-                                    <span>SKU: {p.sku || 'S/N'}</span>
-                                    <span>•</span>
-                                    <span>{p.category}</span>
-                                </div>
-                            </div>
-                        ))
-                    )}
-                </div>
-            )}
-        </div>
-    );
-};
-
-
-// --- COMPONENTE PRINCIPAL ---
-const InboundReception = () => {
+export default function InboundReception() {
   const { user } = useAuth();
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
   
-  // Maestros
-  const [suppliers, setSuppliers] = useState([]);
-  const [projects, setProjects] = useState([]);
+  // --- ESTADOS GLOBALES ---
   const [warehouses, setWarehouses] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [selectedWarehouse, setSelectedWarehouse] = useState('');
+  const [activeTab, setActiveTab] = useState('OC');
+  const [loading, setLoading] = useState(false);
+  const [processing, setProcessing] = useState(false);
 
-  // Formulario Cabecera
-  const [header, setHeader] = useState({
-      document_type: 'FACTURA',
-      document_number: '',
-      supplier_id: '',
-      project_id: '',
-      warehouse_id: '',
-      issue_date: new Date().toISOString().split('T')[0],
-      notes: ''
+  // --- DATOS MAESTROS ---
+  const [projectsDB, setProjectsDB] = useState([]); 
+  const [suppliersDB, setSuppliersDB] = useState([]); 
+  const [clientsList, setClientsList] = useState([]); 
+  const [clientCatalog, setClientCatalog] = useState([]); 
+
+  // --- ESTADOS OC ---
+  const [ocNumber, setOcNumber] = useState('');
+  const [ocData, setOcData] = useState(null);
+  const [ocHeader, setOcHeader] = useState(null);
+  const [ocHistory, setOcHistory] = useState({});
+  const [ocInputs, setOcInputs] = useState({});
+
+  // --- ESTADOS ASIGNADOS (MANUAL) ---
+  const [assignedForm, setAssignedForm] = useState({
+    client_name: '',       
+    project_name: '',      
+    document_number: '',
+    supplier_name: ''      
   });
+  const [manualCart, setManualCart] = useState([]);
+  const [selectedMaterialId, setSelectedMaterialId] = useState(''); 
+  const [newItem, setNewItem] = useState({ 
+    code: '', name: '', quantity: '', unit: 'UN', price: '' 
+  });
+  const [receiptFile, setReceiptFile] = useState(null);
 
-  // Ítems del Documento
-  const [items, setItems] = useState([]);
-  
-  // Estado temporal para agregar ítem
-  const [currentItem, setCurrentItem] = useState({ product: null, quantity: '', unit_price: '' });
-
-  // Carga Inicial
+  // ==========================================
+  // 1. CARGA INICIAL DE MAESTROS
+  // ==========================================
   useEffect(() => {
-      const loadMasters = async () => {
-          const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-          if (!profile) return;
-          const orgId = profile.organization_id;
-
-          const [sup, proj, ware, prod] = await Promise.all([
-              supabase.from('global_suppliers').select('id, business_name, rut').eq('organization_id', orgId),
-              supabase.from('global_projects').select('id, name, code').eq('organization_id', orgId).eq('status', 'ACTIVE'),
-              supabase.from('logis_warehouses').select('id, name, type').eq('organization_id', orgId).eq('is_active', true),
-              supabase.from('logis_products').select('id, name, sku, unit, category').eq('organization_id', orgId)
-          ]);
-
-          setSuppliers(sup.data || []);
-          setProjects(proj.data || []);
-          setWarehouses(ware.data || []);
-          setProducts(prod.data || []);
-      };
-      if (user) loadMasters();
-  }, [user]);
-
-  // --- LÓGICA DE ÍTEMS ---
-  const handleAddItem = (e) => {
-      e.preventDefault();
-      if (!currentItem.product || !currentItem.quantity || !currentItem.unit_price) return;
-      
-      const newItem = {
-          ...currentItem,
-          total: Number(currentItem.quantity) * Number(currentItem.unit_price)
-      };
-
-      setItems([...items, newItem]);
-      // Limpiamos solo cantidad y precio, el producto se limpia al seleccionarse de nuevo
-      setCurrentItem({ product: null, quantity: '', unit_price: '' }); 
-  };
-
-  const handleRemoveItem = (index) => {
-      const newItems = [...items];
-      newItems.splice(index, 1);
-      setItems(newItems);
-  };
-
-  // Cálculos Totales
-  const netTotal = items.reduce((sum, item) => sum + item.total, 0);
-  const taxTotal = Math.round(netTotal * 0.19); 
-  const grandTotal = netTotal + taxTotal;
-
-  // --- GUARDAR Y PROCESAR ---
-  const handleSave = async (status) => {
-      if (!header.supplier_id) return alert("Falta el Proveedor");
-      if (!header.warehouse_id) return alert("Falta la Bodega de Destino");
-      if (!header.document_number) return alert("Falta el N° de Documento");
-      if (items.length === 0) return alert("No hay productos en la lista");
-
-      const isConfirmed = status === 'CONFIRMED';
-      const msg = isConfirmed 
-        ? "¿Confirmar Ingreso? Esto sumará el stock a la bodega seleccionada." 
-        : "Se guardará como borrador.";
-      
-      if (!window.confirm(msg)) return;
-
-      setLoading(true);
+    const fetchMasters = async () => {
       try {
-          const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
+        const { data: wh } = await supabase.from('warehouses').select('*').eq('is_active', true);
+        setWarehouses(wh || []);
 
-          // 1. Guardar Cabecera
-          const { data: doc, error: docError } = await supabase.from('logis_inbound_documents').insert({
-              organization_id: profile.organization_id,
-              supplier_id: header.supplier_id,
-              project_id: header.project_id || null,
-              warehouse_id: header.warehouse_id,
-              received_by_user: user.id,
-              document_type: header.document_type,
-              document_number: header.document_number,
-              issue_date: header.issue_date,
-              net_total: netTotal,
-              tax_total: taxTotal,
-              grand_total: grandTotal,
-              reception_status: status,
-              notes: header.notes
-          }).select().single();
+        const { data: proj } = await supabaseProcurement
+            .from('proyectos')
+            .select('id, proyecto, cliente, activo')
+            .eq('activo', true)
+            .order('proyecto', { ascending: true });
+        
+        if (proj) {
+            setProjectsDB(proj);
+            const uniqueClients = [...new Set(proj.map(p => p.cliente))].filter(Boolean).sort();
+            setClientsList(uniqueClients);
+        }
 
-          if (docError) throw docError;
-
-          // 2. Guardar Ítems
-          const itemsData = items.map(i => ({
-              inbound_id: doc.id,
-              product_id: i.product.id,
-              quantity: i.quantity,
-              unit_price: i.unit_price
-          }));
-          
-          const { error: itemsError } = await supabase.from('logis_inbound_items').insert(itemsData);
-          if (itemsError) throw itemsError;
-
-          // 3. SI ES CONFIRMADO -> GENERAR MOVIMIENTOS (KARDEX)
-          if (isConfirmed) {
-              const movementsData = items.map(i => ({
-                  organization_id: profile.organization_id,
-                  warehouse_id: header.warehouse_id,
-                  product_id: i.product.id,
-                  movement_type: 'IN',
-                  quantity: i.quantity,
-                  user_id: user.id,
-                  comments: `Ingreso ${header.document_type} #${header.document_number}`
-              }));
-              
-              const { error: moveError } = await supabase.from('logis_movements').insert(movementsData);
-              if (moveError) throw moveError;
-          }
-
-          alert("Operación exitosa.");
-          navigate('/inventory'); // <--- CAMBIO: VOLVER A INVENTARIO
+        const { data: supp } = await supabaseProcurement
+            .from('proveedores')
+            .select('id, nombre, rut') 
+            .order('nombre', { ascending: true });
+        
+        setSuppliersDB(supp || []);
 
       } catch (error) {
-          alert("Error: " + error.message);
-      } finally {
-          setLoading(false);
+        console.error("Error cargando maestros:", error);
+      }
+    };
+    fetchMasters();
+  }, []);
+
+  // ==========================================
+  // 2. LÓGICA DE CATÁLOGO (ASIGNADOS)
+  // ==========================================
+  useEffect(() => {
+    const loadCatalog = async () => {
+        if (!assignedForm.client_name) {
+            setClientCatalog([]);
+            return;
+        }
+        
+        const { data, error } = await supabase
+            .from('assigned_materials')
+            .select('*')
+            .ilike('client_name', `%${assignedForm.client_name}%`)
+            .order('description', { ascending: true });
+            
+        if (!error) setClientCatalog(data || []);
+    };
+    loadCatalog();
+  }, [assignedForm.client_name]);
+
+  const handleMaterialSelect = (e) => {
+      const matId = e.target.value;
+      setSelectedMaterialId(matId);
+
+      const material = clientCatalog.find(m => m.id === matId);
+      if (material) {
+          setNewItem({
+              code: material.code,
+              name: material.description, 
+              unit: material.unit || 'UN',
+              quantity: '', 
+              price: ''
+          });
+      } else {
+          setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
       }
   };
 
+  const filteredProjects = useMemo(() => {
+    if (!assignedForm.client_name) return [];
+    return projectsDB.filter(p => p.cliente === assignedForm.client_name);
+  }, [projectsDB, assignedForm.client_name]);
+
+
+  // ==========================================
+  // 3. LÓGICA OC (CORREGIDA: PRECIO UNITARIO)
+  // ==========================================
+  const handleSearchOC = async () => {
+    if (!ocNumber) return;
+    setLoading(true);
+    setOcData(null);
+    setOcHeader(null);
+    setReceiptFile(null);
+    setOcInputs({});
+
+    try {
+      const { data: ocLines, error } = await supabaseProcurement
+        .from('orden_de_compra')
+        .select('*')
+        .eq('orden_compra', parseInt(ocNumber)); 
+
+      if (error || !ocLines?.length) {
+        alert("Orden de Compra no encontrada.");
+        return;
+      }
+
+      const firstLine = ocLines[0];
+      const providerInfo = suppliersDB.find(s => s.id === firstLine.proveedor);
+      
+      setOcHeader({
+        fecha: firstLine.fecha,
+        proveedor: providerInfo ? providerInfo.nombre : 'Proveedor Desconocido',
+        rut: providerInfo ? providerInfo.rut : '-'
+      });
+
+      // Historial de recepciones
+      const { data: history } = await supabase
+        .from('movements')
+        .select('oc_line_id, quantity')
+        .eq('oc_number', String(ocNumber))
+        .eq('type', 'INBOUND');
+
+      const receivedMap = {};
+      history?.forEach(mov => {
+        receivedMap[mov.oc_line_id] = (receivedMap[mov.oc_line_id] || 0) + Number(mov.quantity);
+      });
+      setOcHistory(receivedMap);
+
+      // CORRECCIÓN PRECIOS: Prioridad al precio de la OC (precio_unitario)
+      const initialInputs = {};
+      
+      ocLines.forEach(line => {
+        // Buscamos precio en OC, si no existe (raro), buscamos en historial de productos, si no 0.
+        // Nota: line.precio_unitario es la columna clave que mencionaste.
+        const officialPrice = line.precio_unitario || line.precio || 0; 
+
+        initialInputs[line.art_corr] = {
+            quantity: '', 
+            price: officialPrice // <--- AQUÍ ESTÁ LA CORRECCIÓN
+        };
+      });
+      
+      setOcInputs(initialInputs);
+      setOcData(ocLines);
+
+    } catch (err) {
+      console.error(err);
+      alert("Error buscando OC.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmitOC = async () => {
+    if (!selectedWarehouse) return alert("Selecciona una bodega.");
+    const mainDoc = ocInputs['global_doc'];
+    if (!mainDoc) return alert("Falta N° Guía / Factura.");
+
+    const itemsToReceive = [];
+    for (const line of ocData) {
+      const input = ocInputs[line.art_corr] || {};
+      const qty = Number(input.quantity || 0);
+      const price = Number(input.price || 0);
+      const received = ocHistory[line.art_corr] || 0;
+      const pending = line.cantidad - received;
+
+      if (qty > 0) {
+        if (qty > pending) return alert(`Error: Excedes el pendiente en item ${line.codigo}`);
+        itemsToReceive.push({ lineData: line, receiveQty: qty, unitPrice: price });
+      }
+    }
+
+    if (itemsToReceive.length === 0) return alert("Ingresa cantidades.");
+
+    setProcessing(true);
+    try {
+        let docUrl = null;
+        if (receiptFile) {
+            const fileName = `OC-${ocNumber}-${Date.now()}.${receiptFile.name.split('.').pop()}`;
+            await supabase.storage.from('documents').upload(fileName, receiptFile);
+            docUrl = fileName;
+        }
+
+        for (const item of itemsToReceive) {
+            // Upsert Producto
+            let productId = null;
+            const { data: existingProd } = await supabase.from('products').select('id, current_stock').eq('code', item.lineData.codigo).maybeSingle();
+
+            if (existingProd) {
+                productId = existingProd.id;
+                await supabase.from('products').update({
+                    price: item.unitPrice, 
+                    current_stock: Number(existingProd.current_stock) + Number(item.receiveQty)
+                }).eq('id', productId);
+            } else {
+                const { data: newProd } = await supabase.from('products').insert({
+                    code: item.lineData.codigo,
+                    name: item.lineData.descripcion,
+                    unit: item.lineData.unidad || 'UN',
+                    price: item.unitPrice,
+                    current_stock: item.receiveQty
+                }).select().single();
+                productId = newProd.id;
+            }
+
+            // Movimiento
+            await supabase.from('movements').insert({
+                type: 'INBOUND',
+                warehouse_id: selectedWarehouse,
+                product_id: productId,
+                quantity: item.receiveQty,
+                unit_price: item.unitPrice,
+                oc_number: String(ocNumber),
+                oc_line_id: item.lineData.art_corr,
+                document_number: mainDoc,
+                reception_document_url: docUrl,
+                other_data: `OC: ${ocNumber} | ${item.lineData.descripcion}`,
+                comments: ocInputs['global_obs'] || `Recepción OC ${ocNumber}`,
+                user_email: user?.email
+            });
+        }
+
+        alert("✅ Recepción Guardada.");
+        handleSearchOC(); 
+        setOcInputs(p => ({ ...p, global_doc: '', global_obs: '' }));
+        setReceiptFile(null);
+    } catch (err) {
+        alert("Error: " + err.message);
+    } finally {
+        setProcessing(false);
+    }
+  };
+
+  // ==========================================
+  // 4. LÓGICA ASIGNADOS
+  // ==========================================
+  const addManualItem = () => {
+    if (!selectedMaterialId || !newItem.quantity || !newItem.price) {
+        return alert('Faltan datos (Selección, Cantidad o Precio).');
+    }
+    setManualCart([...manualCart, { ...newItem }]);
+    setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
+    setSelectedMaterialId('');
+  };
+
+  const removeManualItem = (idx) => {
+    setManualCart(manualCart.filter((_, i) => i !== idx));
+  };
+
+  const handleSubmitAssigned = async () => {
+    if (!selectedWarehouse) return alert("Selecciona bodega.");
+    if (!assignedForm.client_name) return alert("Selecciona Cliente.");
+    if (!assignedForm.project_name) return alert("Selecciona Proyecto.");
+    if (!assignedForm.document_number) return alert("Falta N° Guía.");
+    if (manualCart.length === 0) return alert("Carrito vacío.");
+
+    setProcessing(true);
+    try {
+        let docUrl = null;
+        if (receiptFile) {
+            const fileName = `MAN-${Date.now()}.${receiptFile.name.split('.').pop()}`;
+            await supabase.storage.from('documents').upload(fileName, receiptFile);
+            docUrl = fileName;
+        }
+
+        for (const item of manualCart) {
+            let productId = null;
+            const { data: existingProd } = await supabase.from('products')
+                .select('id, current_stock').eq('code', item.code).maybeSingle();
+
+            if (existingProd) {
+                productId = existingProd.id;
+                await supabase.from('products').update({
+                    price: item.price,
+                    current_stock: Number(existingProd.current_stock) + Number(item.quantity)
+                }).eq('id', productId);
+            } else {
+                const { data: newProd } = await supabase.from('products').insert({
+                    code: item.code, name: item.name, unit: item.unit, 
+                    price: item.price, current_stock: item.quantity
+                }).select().single();
+                productId = newProd.id;
+            }
+
+            await supabase.from('movements').insert({
+                type: 'INBOUND',
+                warehouse_id: selectedWarehouse,
+                product_id: productId,
+                quantity: item.quantity,
+                unit_price: item.price,
+                document_number: assignedForm.document_number,
+                client_owner: assignedForm.client_name, 
+                project_id: assignedForm.project_name, 
+                supplier_id: assignedForm.supplier_name, 
+                reception_document_url: docUrl,
+                other_data: `Guía: ${assignedForm.document_number} | Prov: ${assignedForm.supplier_name || '-'}`,
+                comments: `Ingreso Asignado | ${assignedForm.project_name}`,
+                user_email: user?.email
+            });
+        }
+
+        alert("✅ Ingreso Asignado Guardado.");
+        setManualCart([]);
+        setAssignedForm({ client_name: '', project_name: '', document_number: '', supplier_name: '' });
+        setReceiptFile(null);
+        setSelectedMaterialId('');
+    } catch (err) {
+        console.error(err);
+        alert("Error: " + err.message);
+    } finally {
+        setProcessing(false);
+    }
+  };
+
+
   return (
-    <div className="min-h-screen bg-stone-50 font-sans text-stone-800">
-
-      <div className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* COLUMNA IZQUIERDA: FORMULARIO DE DATOS */}
-          <div className="lg:col-span-2 space-y-6">
-              
-              {/* 1. Datos del Documento */}
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
-                  <h3 className="font-bold text-stone-800 mb-4 flex items-center gap-2 border-b pb-2">
-                      <FileText size={18} className="text-orange-500"/> Datos del Documento
-                  </h3>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                      <div>
-                          <label className="label-logis">Tipo Documento</label>
-                          <select className="input-logis" value={header.document_type} onChange={e => setHeader({...header, document_type: e.target.value})}>
-                              <option value="FACTURA">Factura Electrónica</option>
-                              <option value="GUIA">Guía de Despacho</option>
-                              <option value="BOLETA">Boleta</option>
-                          </select>
-                      </div>
-                      <div>
-                          <label className="label-logis">N° Folio / Documento</label>
-                          <input type="text" className="input-logis font-mono" placeholder="Ej: 12345" value={header.document_number} onChange={e => setHeader({...header, document_number: e.target.value})} />
-                      </div>
-                      <div>
-                          <label className="label-logis">Fecha Emisión</label>
-                          <input type="date" className="input-logis" value={header.issue_date} onChange={e => setHeader({...header, issue_date: e.target.value})} />
-                      </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                          <label className="label-logis flex items-center gap-1"><Truck size={12}/> Proveedor</label>
-                          <select className="input-logis" value={header.supplier_id} onChange={e => setHeader({...header, supplier_id: e.target.value})}>
-                              <option value="">-- Seleccionar Proveedor --</option>
-                              {suppliers.map(s => <option key={s.id} value={s.id}>{s.business_name} ({s.rut})</option>)}
-                          </select>
-                      </div>
-                      <div>
-                          <label className="label-logis flex items-center gap-1"><HardHat size={12}/> Proyecto / Obra (Opcional)</label>
-                          <select className="input-logis" value={header.project_id} onChange={e => setHeader({...header, project_id: e.target.value})}>
-                              <option value="">-- Stock General --</option>
-                              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          </select>
-                      </div>
-                      <div className="md:col-span-2">
-                          <label className="label-logis flex items-center gap-1 text-orange-700"><Warehouse size={12}/> Bodega de Destino (Recepción Física)</label>
-                          <select className="input-logis border-orange-300 bg-orange-50" value={header.warehouse_id} onChange={e => setHeader({...header, warehouse_id: e.target.value})}>
-                              <option value="">-- Seleccionar Bodega --</option>
-                              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name} ({w.type})</option>)}
-                          </select>
-                      </div>
-                  </div>
-              </div>
-
-              {/* 2. Ingreso de Productos (ALINEACIÓN CORREGIDA) */}
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
-                  <h3 className="font-bold text-stone-800 mb-4 flex items-center gap-2 border-b pb-2">
-                      <Plus size={18} className="text-emerald-500"/> Agregar Ítems
-                  </h3>
-                  
-                  {/* Contenedor Flex con alineación al fondo (items-end) */}
-                  <div className="flex flex-col md:flex-row gap-4 items-end">
-                      
-                      <div className="flex-grow">
-                          <label className="label-logis">Producto</label>
-                          <ProductCombobox 
-                              products={products} 
-                              onSelect={(p) => setCurrentItem({...currentItem, product: p})} 
-                          />
-                          {/* Feedback de selección (ocupa espacio fijo para no saltar) */}
-                          <div className="h-5 mt-1">
-                              {currentItem.product && (
-                                  <span className="text-xs text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded inline-block truncate max-w-[200px]">
-                                      {currentItem.product.name} ({currentItem.product.sku})
-                                  </span>
-                              )}
-                          </div>
-                      </div>
-                      
-                      <div className="w-24 pb-6"> {/* Padding bottom para compensar la etiqueta de feedback del producto */}
-                          <label className="label-logis">Cantidad</label>
-                          <input 
-                            type="number" 
-                            className="input-logis text-center h-[40px]" // Altura fija
-                            value={currentItem.quantity} 
-                            onChange={e => setCurrentItem({...currentItem, quantity: e.target.value})} 
-                          />
-                      </div>
-                      
-                      <div className="w-32 pb-6">
-                          <label className="label-logis">Precio Unit.</label>
-                          <input 
-                            type="number" 
-                            className="input-logis text-right h-[40px]" // Altura fija
-                            placeholder="$" 
-                            value={currentItem.unit_price} 
-                            onChange={e => setCurrentItem({...currentItem, unit_price: e.target.value})} 
-                          />
-                      </div>
-
-                      <div className="pb-6">
-                          <button 
-                            onClick={handleAddItem} 
-                            className="bg-stone-800 hover:bg-stone-900 text-white p-2.5 rounded-lg shadow transition-colors h-[40px] w-[40px] flex items-center justify-center"
-                            title="Agregar a la lista"
-                          >
-                              <Plus size={20} />
-                          </button>
-                      </div>
-                  </div>
-              </div>
-
-              {/* 3. Tabla de Detalle */}
-              <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
-                  <table className="w-full text-left text-sm">
-                      <thead className="bg-stone-100 text-stone-500 font-bold uppercase text-xs">
-                          <tr>
-                              <th className="p-3">Producto</th>
-                              <th className="p-3 text-center">Cant.</th>
-                              <th className="p-3 text-right">Precio</th>
-                              <th className="p-3 text-right">Total</th>
-                              <th className="p-3 w-10"></th>
-                          </tr>
-                      </thead>
-                      <tbody className="divide-y divide-stone-100">
-                          {items.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-stone-400 italic">No hay productos agregados.</td></tr>}
-                          {items.map((item, idx) => (
-                              <tr key={idx} className="hover:bg-stone-50">
-                                  <td className="p-3">
-                                      <div className="font-bold text-stone-800">{item.product.name}</div>
-                                      <div className="text-xs text-stone-400 font-mono">{item.product.sku}</div>
-                                  </td>
-                                  <td className="p-3 text-center font-bold">{item.quantity} <span className="text-[10px] text-stone-400 font-normal">{item.product.unit}</span></td>
-                                  <td className="p-3 text-right font-mono">${Number(item.unit_price).toLocaleString()}</td>
-                                  <td className="p-3 text-right font-mono font-bold">${item.total.toLocaleString()}</td>
-                                  <td className="p-3 text-right">
-                                      <button onClick={() => handleRemoveItem(idx)} className="text-stone-300 hover:text-red-500"><Trash2 size={16}/></button>
-                                  </td>
-                              </tr>
-                          ))}
-                      </tbody>
-                  </table>
-              </div>
-          </div>
-
-          {/* COLUMNA DERECHA: TOTALES Y ACCIONES */}
-          <div className="lg:col-span-1 space-y-6">
-              
-              {/* Totales */}
-              <div className="bg-white p-6 rounded-xl shadow-lg border border-stone-200 sticky top-24">
-                  <h3 className="font-bold text-stone-800 mb-4 flex items-center gap-2">
-                      <Calculator size={18} /> Resumen
-                  </h3>
-                  
-                  <div className="space-y-3 text-sm border-b border-stone-100 pb-4 mb-4">
-                      <div className="flex justify-between text-stone-600">
-                          <span>Neto</span>
-                          <span className="font-mono">${netTotal.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between text-stone-600">
-                          <span>IVA (19%)</span>
-                          <span className="font-mono">${taxTotal.toLocaleString()}</span>
-                      </div>
-                  </div>
-                  
-                  <div className="flex justify-between items-center mb-6">
-                      <span className="text-lg font-bold text-stone-800">Total</span>
-                      <span className="text-2xl font-bold text-emerald-600 font-mono">${grandTotal.toLocaleString()}</span>
-                  </div>
-
-                  <div className="space-y-3">
-                      <button 
-                          onClick={() => handleSave('CONFIRMED')}
-                          disabled={loading}
-                          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-lg font-bold shadow-md flex justify-center items-center gap-2 transition-transform active:scale-95"
-                      >
-                          {loading ? 'Procesando...' : <><CheckCircle size={18}/> Confirmar Ingreso</>}
-                      </button>
-                      
-                      <button 
-                          onClick={() => handleSave('DRAFT')}
-                          disabled={loading}
-                          className="w-full bg-white border-2 border-stone-200 text-stone-600 py-2 rounded-lg font-bold hover:bg-stone-50 flex justify-center items-center gap-2"
-                      >
-                          <Save size={18}/> Guardar Borrador
-                      </button>
-
-                      {/* BOTÓN CANCELAR NUEVO */}
-                      <button 
-                          onClick={() => navigate('/inventory')} 
-                          className="w-full bg-red-50 text-red-600 py-2 rounded-lg font-medium hover:bg-red-100 flex justify-center items-center gap-2 text-sm mt-2 border border-red-100"
-                      >
-                          <XCircle size={16}/> Cancelar / Salir
-                      </button>
-                  </div>
-
-                  <p className="text-xs text-stone-400 mt-4 text-center leading-tight">
-                      * Confirmar actualizará el stock en la bodega seleccionada inmediatamente.
-                  </p>
-              </div>
-
-          </div>
+    <div className="pb-20 bg-slate-50 min-h-screen font-sans text-slate-800">
+      
+      {/* HEADER */}
+      <div className="bg-white border-b sticky top-0 z-10 shadow-sm px-6 py-4">
+        <h1 className="text-xl font-bold flex items-center gap-2 text-blue-700">
+            <Truck/> Recepción de Materiales
+        </h1>
+        <p className="text-xs text-slate-500">Ingreso valorizado (Compras o Asignación)</p>
       </div>
 
-      {/* Estilos rápidos */}
-      <style>{`
-        .label-logis { display: block; font-size: 0.75rem; font-weight: 700; color: #78716c; margin-bottom: 0.25rem; text-transform: uppercase; }
-        .input-logis { width: 100%; border: 1px solid #d6d3d1; padding: 0.5rem; border-radius: 0.5rem; font-size: 0.875rem; outline: none; transition: all 0.2s; }
-        .input-logis:focus { border-color: #f97316; ring: 2px; ring-color: #fdba74; }
-      `}</style>
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6">
+        
+        {/* SELECCIÓN BODEGA Y MODO */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Bodega de Destino</label>
+                    <select className="w-full border-2 border-slate-200 rounded-lg p-2 font-bold text-slate-700 outline-none bg-transparent" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
+                        <option value="">-- Seleccionar --</option>
+                        {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Tipo de Ingreso</label>
+                    <div className="flex bg-slate-100 p-1 rounded-lg">
+                        <button onClick={() => setActiveTab('OC')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${activeTab === 'OC' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}>Orden de Compra</button>
+                        <button onClick={() => setActiveTab('ASSIGNED')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${activeTab === 'ASSIGNED' ? 'bg-white shadow text-purple-600' : 'text-slate-400'}`}>Material Asignado</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {/* --- PESTAÑA OC --- */}
+        {activeTab === 'OC' && (
+            <div className="space-y-6 animate-in fade-in">
+                <div className="bg-blue-50 border border-blue-100 p-6 rounded-xl flex gap-4 items-end">
+                    <div className="flex-1">
+                        <label className="text-xs font-bold text-blue-800 uppercase mb-1">N° Orden de Compra</label>
+                        <div className="flex items-center bg-white border border-blue-200 rounded-lg px-3 py-2">
+                            <Search size={18} className="text-blue-300 mr-2"/>
+                            <input type="number" placeholder="Ej: 4500..." className="w-full outline-none font-mono text-blue-900 font-bold" value={ocNumber} onChange={e => setOcNumber(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearchOC()}/>
+                        </div>
+                    </div>
+                    <button onClick={handleSearchOC} disabled={loading} className="bg-blue-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-50">
+                        {loading ? <Loader className="animate-spin"/> : 'Buscar OC'}
+                    </button>
+                </div>
+
+                {ocData && (
+                    <div className="space-y-6">
+                        <div className="bg-white p-4 rounded-lg border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div><span className="block text-xs text-slate-400 font-bold uppercase">Proveedor</span><div className="font-bold text-slate-700 flex items-center gap-2"><Building size={16}/> {ocHeader?.proveedor}</div></div>
+                            <div><span className="block text-xs text-slate-400 font-bold uppercase">Fecha</span><div className="font-bold text-slate-700 flex items-center gap-2"><Calendar size={16}/> {ocHeader?.fecha}</div></div>
+                            <div><span className="block text-xs text-slate-400 font-bold uppercase">Total Líneas</span><div className="font-bold text-slate-700">{ocData.length} Ítems</div></div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-white p-4 rounded-lg border border-slate-200">
+                             <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">N° Guía / Factura *</label><input type="text" className="w-full px-3 py-2 border rounded-lg outline-none focus:border-blue-500 font-bold" onChange={(e) => setOcInputs(p => ({...p, global_doc: e.target.value}))}/></div>
+                             <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adjuntar Respaldo</label><label className={`flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed rounded-lg cursor-pointer ${receiptFile ? 'bg-emerald-50 border-emerald-300' : 'hover:bg-slate-50'}`}>{receiptFile ? <CheckCircle size={18}/> : <Paperclip size={18}/>}<span className="text-sm font-medium truncate">{receiptFile ? receiptFile.name : 'Subir PDF...'}</span><input type="file" className="hidden" onChange={e => setReceiptFile(e.target.files[0])}/></label></div>
+                        </div>
+
+                        <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-slate-100 text-slate-600 uppercase text-xs">
+                                    <tr>
+                                        <th className="px-4 py-3">Item</th><th className="px-4 py-3 text-center">Total OC</th><th className="px-4 py-3 text-center">Pendiente</th><th className="px-4 py-3 text-center bg-blue-50 w-24">Recibir</th><th className="px-4 py-3 text-center bg-green-50 w-28">Precio ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {ocData.map((line) => {
+                                        const received = ocHistory[line.art_corr] || 0;
+                                        const pending = line.cantidad - received;
+                                        const isComplete = pending <= 0;
+                                        const currentInput = ocInputs[line.art_corr] || {};
+                                        return (
+                                            <tr key={line.id} className={isComplete ? 'bg-slate-50 opacity-60' : ''}>
+                                                <td className="px-4 py-3 font-bold">{line.descripcion}</td>
+                                                <td className="px-4 py-3 text-center">{line.cantidad}</td>
+                                                <td className="px-4 py-3 text-center text-orange-600">{pending > 0 ? pending : 0}</td>
+                                                <td className="px-4 py-2 bg-blue-50/30"><input type="number" min="0" max={pending} disabled={isComplete} className="w-full text-center border rounded font-bold" value={currentInput.quantity || ''} onChange={(e) => setOcInputs(p => ({ ...p, [line.art_corr]: { ...p[line.art_corr], quantity: e.target.value } }))}/></td>
+                                                <td className="px-4 py-2 bg-green-50/30"><input type="number" disabled={isComplete} className="w-full text-right border rounded text-green-700" value={currentInput.price || ''} onChange={(e) => setOcInputs(p => ({ ...p, [line.art_corr]: { ...p[line.art_corr], price: e.target.value } }))}/></td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div className="flex justify-end pt-4 border-t border-slate-200">
+                            <button onClick={handleSubmitOC} disabled={processing} className="bg-blue-600 text-white px-8 py-3 rounded-lg font-bold shadow-lg disabled:opacity-50">{processing ? <Loader className="animate-spin"/> : 'Confirmar'}</button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        )}
+
+        {/* --- PESTAÑA ASIGNADO --- */}
+        {activeTab === 'ASSIGNED' && (
+            <div className="space-y-6 animate-in fade-in">
+                <div className="bg-white p-5 rounded-xl shadow-sm border border-purple-100 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div><label className="text-xs font-bold text-slate-400 block mb-1">Cliente</label><select className="w-full border p-2 rounded-lg bg-slate-50" value={assignedForm.client_name} onChange={e => {setAssignedForm({...assignedForm, client_name: e.target.value, project_name: ''}); setClientCatalog([]);}}><option value="">-- Seleccionar --</option>{clientsList.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                    <div><label className="text-xs font-bold text-slate-400 block mb-1">Proyecto</label><select className={`w-full border p-2 rounded-lg ${!assignedForm.client_name ? 'bg-slate-100' : 'bg-slate-50'}`} value={assignedForm.project_name} onChange={e => setAssignedForm({...assignedForm, project_name: e.target.value})} disabled={!assignedForm.client_name}><option value="">{assignedForm.client_name ? '-- Seleccionar --' : '-- Primero Cliente --'}</option>{filteredProjects.map(p => <option key={p.id} value={p.proyecto}>{p.proyecto}</option>)}</select></div>
+                    <div><label className="text-xs font-bold text-slate-400 block mb-1">Proveedor</label><select className="w-full border p-2 rounded-lg bg-slate-50" value={assignedForm.supplier_name} onChange={e => setAssignedForm({...assignedForm, supplier_name: e.target.value})}><option value="">-- Seleccionar --</option>{suppliersDB.map(s => <option key={s.id} value={s.nombre}>{s.nombre}</option>)}</select></div>
+                    <div><label className="text-xs font-bold text-slate-400 block mb-1">N° Guía</label><input type="text" className="w-full border p-2 rounded-lg font-bold" value={assignedForm.document_number} onChange={e => setAssignedForm({...assignedForm, document_number: e.target.value})} /></div>
+                </div>
+
+                <div className="bg-purple-50 p-5 rounded-xl border border-purple-100 grid grid-cols-12 gap-3 mb-4">
+                    <div className="col-span-4">
+                        <label className="text-[10px] font-bold text-purple-700 uppercase">Material ({assignedForm.client_name})</label>
+                        <select className="w-full p-2 rounded border border-purple-200 text-sm" value={selectedMaterialId} onChange={handleMaterialSelect}>
+                            <option value="">-- Seleccionar Material --</option>
+                            {clientCatalog.map(m => <option key={m.id} value={m.id}>{m.description} ({m.code})</option>)}
+                        </select>
+                    </div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Código</label><input type="text" className="w-full p-2 rounded border border-purple-200 bg-white opacity-80" value={newItem.code} readOnly /></div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Cant.</label><input type="number" className="w-full p-2 rounded border border-purple-200 font-bold text-center" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: e.target.value})} /></div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-green-700 uppercase">Precio ($)</label><input type="number" className="w-full p-2 rounded border border-green-200 font-bold text-green-800" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} /></div>
+                    <div className="col-span-2 flex items-end"><button onClick={addManualItem} className="w-full bg-purple-600 text-white p-2 rounded-lg font-bold hover:bg-purple-700 flex justify-center gap-1"><Plus size={18}/> Agregar</button></div>
+                </div>
+
+                <div className="bg-white border rounded-xl overflow-hidden shadow-sm">
+                    <table className="w-full text-sm">
+                        <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
+                            <tr><th className="px-4 py-3 text-left">Material</th><th className="px-4 py-3 text-center">Cant</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Total</th><th className="px-4 py-3"></th></tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {manualCart.map((item, idx) => (
+                                <tr key={idx}><td className="px-4 py-3 font-bold">{item.name} <span className="font-normal text-xs">({item.code})</span></td><td className="px-4 py-3 text-center">{item.quantity} {item.unit}</td><td className="px-4 py-3 text-right text-green-700">${item.price}</td><td className="px-4 py-3 text-right font-black">${(item.quantity*item.price).toLocaleString()}</td><td className="px-4 py-3 text-center"><button onClick={() => removeManualItem(idx)} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button></td></tr>
+                            ))}
+                            {manualCart.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">Carrito vacío</td></tr>}
+                        </tbody>
+                        {manualCart.length > 0 && <tfoot className="bg-slate-50"><tr><td colSpan="3" className="px-4 py-3 text-right font-bold uppercase text-slate-500">Total:</td><td className="px-4 py-3 text-right font-black text-lg text-green-700">${manualCart.reduce((sum, i) => sum + (i.quantity * i.price), 0).toLocaleString()}</td><td></td></tr></tfoot>}
+                    </table>
+                    <div className="p-4 bg-slate-50 border-t flex justify-between items-center">
+                        <label className="flex items-center gap-2 cursor-pointer bg-white border px-3 py-2 rounded-lg hover:bg-slate-50"><UploadCloud size={18} className="text-purple-500"/><span className="text-xs font-bold">{receiptFile ? 'Adjunto OK' : 'Adjuntar Doc'}</span><input type="file" className="hidden" onChange={e => setReceiptFile(e.target.files[0])}/></label>
+                        <button onClick={handleSubmitAssigned} disabled={processing || manualCart.length === 0} className="bg-purple-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-black shadow-lg disabled:opacity-50">{processing ? <Loader className="animate-spin"/> : 'Confirmar Ingreso'}</button>
+                    </div>
+                </div>
+            </div>
+        )}
+      </div>
     </div>
   );
-};
-
-export default InboundReception;
+}

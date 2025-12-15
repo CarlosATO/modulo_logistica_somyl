@@ -1,397 +1,395 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { supabaseProcurement } from '../services/procurementClient';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Search, Package, FileText, Download, Truck, HardHat, User, Plus, Trash2, XCircle, MapPin, X, CheckCircle } from 'lucide-react';
-import { PDFDownloadLink } from '@react-pdf/renderer';
-import DispatchPDF from '../components/DispatchPDF';
-import DispatchHistory from '../components/DispatchHistory'; // Componente Historial Externo
+import { 
+  Search, ArrowRight, Truck, User, FileText, 
+  MapPin, Package, X, CheckCircle, Loader, Briefcase, Plus, AlertCircle 
+} from 'lucide-react';
+import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 
-// --- COMPONENTE: BUSCADOR INTELIGENTE ---
-const ProductSearchCombobox = ({ onSelect, warehouseId }) => {
-    const [search, setSearch] = useState('');
-    const [results, setResults] = useState([]);
-    const [isOpen, setIsOpen] = useState(false);
-    const wrapperRef = useRef(null);
+// --- ESTILOS PDF ---
+const styles = StyleSheet.create({
+  page: { padding: 40, fontSize: 10, fontFamily: 'Helvetica' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20, borderBottom: 1, borderColor: '#eee', paddingBottom: 10 },
+  title: { fontSize: 18, fontWeight: 'bold', color: '#333' },
+  subtitle: { fontSize: 10, color: '#666', marginTop: 4 },
+  section: { marginVertical: 10, padding: 10, backgroundColor: '#f9fafb', borderRadius: 4 },
+  label: { fontSize: 8, color: '#888', marginBottom: 2, textTransform: 'uppercase' },
+  value: { fontSize: 11, fontWeight: 'bold', color: '#333' },
+  table: { marginTop: 20, borderTop: 1, borderColor: '#eee' },
+  tableHeader: { flexDirection: 'row', backgroundColor: '#f3f4f6', padding: 6, fontWeight: 'bold' },
+  tableRow: { flexDirection: 'row', borderBottom: 1, borderColor: '#eee', padding: 6 },
+  col1: { width: '15%' }, col2: { width: '45%' }, col3: { width: '25%' }, col4: { width: '15%', textAlign: 'center' },
+  footer: { position: 'absolute', bottom: 30, left: 40, right: 40, textAlign: 'center', color: '#aaa', fontSize: 8, borderTop: 1, borderColor: '#eee', paddingTop: 10 }
+});
 
-    useEffect(() => {
-        function handleClickOutside(event) {
-            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) setIsOpen(false);
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, [wrapperRef]);
+const DispatchDocument = ({ data }) => (
+  <Document>
+    <Page size="A4" style={styles.page}>
+      <View style={styles.header}>
+        <View><Text style={styles.title}>GUÍA DE DESPACHO</Text><Text style={styles.subtitle}>Folio: {data.folio}</Text></View>
+        <View style={{ alignItems: 'flex-end' }}><Text style={styles.subtitle}>{new Date().toLocaleDateString()}</Text></View>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+          <View style={[styles.section, { flex: 1 }]}><Text style={styles.label}>Origen</Text><Text style={styles.value}>{data.warehouseName}</Text></View>
+          <View style={[styles.section, { flex: 1 }]}><Text style={styles.label}>Destino / Proyecto</Text><Text style={styles.value}>{data.projectName}</Text><Text style={{fontSize:9, marginTop:2}}>{data.stage}</Text></View>
+      </View>
+      <View style={styles.section}><Text style={styles.label}>Receptor</Text><Text style={styles.value}>{data.receiverName} | RUT: {data.receiverRut}</Text></View>
+      <View style={styles.table}>
+        <View style={styles.tableHeader}><Text style={styles.col1}>COD</Text><Text style={styles.col2}>DESC</Text><Text style={styles.col3}>UBICACIÓN</Text><Text style={styles.col4}>CANT</Text></View>
+        {data.items.map((item, i) => (
+            <View key={i} style={styles.tableRow}><Text style={styles.col1}>{item.code}</Text><Text style={styles.col2}>{item.name}</Text><Text style={styles.col3}>{item.locationName}</Text><Text style={styles.col4}>{item.quantity}</Text></View>
+        ))}
+      </View>
+      <Text style={styles.footer}>Sistema Somyl - {data.id}</Text>
+    </Page>
+  </Document>
+);
 
-    useEffect(() => {
-        if (!search || search.length < 2) { setResults([]); return; }
-        const doSearch = async () => {
-            const { data } = await supabase.from('logis_inventory')
-                .select('product:product_id!inner(id, name, sku, unit, category, standard_cost), current_stock')
-                .eq('warehouse_id', warehouseId)
-                .gt('current_stock', 0)
-                .ilike('product.name', `%${search}%`)
-                .limit(15);
-            
-            const uniqueMap = new Map();
-            const uniqueList = [];
-            if (data) {
-                data.forEach(item => {
-                    if (item.product && !uniqueMap.has(item.product.id)) {
-                        uniqueMap.set(item.product.id, true);
-                        const totalStock = data.filter(d => d.product.id === item.product.id).reduce((sum, r) => sum + r.current_stock, 0);
-                        uniqueList.push({ ...item.product, total_stock: totalStock });
-                    }
-                });
-            }
-            setResults(uniqueList);
-        };
-        const timeout = setTimeout(doSearch, 300);
-        return () => clearTimeout(timeout);
-    }, [search, warehouseId]);
-
-    return (
-        <div className="relative w-full" ref={wrapperRef}>
-            <div className="relative">
-                <Search className="absolute left-3 top-2.5 text-stone-400" size={16} />
-                <input 
-                    className="w-full pl-9 pr-4 py-2 border border-stone-300 rounded-lg text-sm focus:ring-2 focus:ring-orange-500 outline-none transition-all"
-                    placeholder="Escribe para buscar material..."
-                    value={search}
-                    onChange={(e) => { setSearch(e.target.value); setIsOpen(true); }}
-                    onFocus={() => setIsOpen(true)}
-                    disabled={!warehouseId}
-                />
-            </div>
-            {isOpen && results.length > 0 && (
-                <div className="absolute z-50 w-full bg-white border border-stone-200 shadow-xl max-h-60 overflow-y-auto rounded-b-lg mt-1">
-                    {results.map(p => (
-                        <div key={p.id} onClick={() => { onSelect(p); setSearch(''); setIsOpen(false); }} className="p-3 hover:bg-orange-50 cursor-pointer border-b border-stone-50 last:border-0 text-sm group">
-                            <div className="flex justify-between items-center">
-                                <span className="font-bold text-stone-800 group-hover:text-orange-700">{p.name}</span>
-                                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded font-bold">Total: {p.total_stock} {p.unit}</span>
-                            </div>
-                            <div className="text-xs text-stone-500 font-mono mt-0.5">SKU: {p.sku}</div>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- MODAL DE PICKING ---
-const PickingModal = ({ product, locations, onClose, onConfirm, suggestedPrice }) => {
-    const [picks, setPicks] = useState({});
-    const totalSelected = Object.values(picks).reduce((sum, val) => sum + (Number(val) || 0), 0);
-
-    const handleInputChange = (locId, value, maxStock) => {
-        let numValue = parseFloat(value);
-        if (isNaN(numValue)) numValue = 0;
-        if (numValue < 0) numValue = 0;
-        if (numValue > maxStock) numValue = maxStock;
-        setPicks(prev => ({ ...prev, [locId]: numValue }));
-    };
-
-    const handleConfirm = () => {
-        if (totalSelected <= 0) return alert("Debe seleccionar al menos una cantidad.");
-        const selectedItems = locations.filter(l => picks[l.location.id] > 0).map(l => ({
-                location: l.location,
-                quantity: picks[l.location.id]
-        }));
-        onConfirm(selectedItems);
-    };
-
-    return (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden border border-stone-200 flex flex-col max-h-[90vh]">
-                <div className="p-5 border-b bg-stone-50 flex justify-between items-center flex-none">
-                    <div>
-                        <h3 className="font-bold text-lg text-stone-800 flex items-center gap-2">
-                            <Package size={20} className="text-orange-600"/> 
-                            Distribución de Retiro
-                        </h3>
-                        <div className="flex items-center gap-4 mt-1">
-                            <span className="text-sm font-bold text-stone-600">{product.name}</span>
-                            <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold border border-emerald-200">
-                                Costo Sugerido: ${suggestedPrice?.toLocaleString() || 0}
-                            </span>
-                        </div>
-                    </div>
-                    <button onClick={onClose} className="text-stone-400 hover:text-red-500 transition-colors"><X size={28}/></button>
-                </div>
-                <div className="p-0 overflow-y-auto flex-grow bg-white">
-                    {locations.length === 0 ? <div className="p-10 text-center text-stone-400 italic">No se encontraron ubicaciones con stock.</div> : (
-                        <table className="w-full text-left border-collapse">
-                            <thead className="bg-stone-100 text-xs font-bold text-stone-500 uppercase sticky top-0 z-10 shadow-sm">
-                                <tr><th className="p-4 border-b w-1/2">Ubicación / Zona</th><th className="p-4 border-b text-center text-blue-600 w-1/4">Stock Actual</th><th className="p-4 border-b text-center bg-orange-50 text-orange-700 w-1/4">A Retirar</th></tr>
-                            </thead>
-                            <tbody className="divide-y divide-stone-100">
-                                {locations.map(l => {
-                                    const withdraw = picks[l.location.id] || '';
-                                    const isSelected = Number(withdraw) > 0;
-                                    return (
-                                        <tr key={l.location.id} className={`transition-colors ${isSelected ? 'bg-orange-50/30' : 'hover:bg-stone-50'}`}>
-                                            <td className="p-4 align-middle">
-                                                <div className="font-bold text-stone-700 text-sm">
-                                                    {l.location.name || l.location.zone} 
-                                                    {l.location.section && ` - ${l.location.section}`} 
-                                                    {l.location.level && ` - ${l.location.level}`}
-                                                </div>
-                                                <div className="text-xs text-stone-400 font-mono mt-0.5 flex items-center gap-2">
-                                                    {l.location.full_code || 'S/C'}
-                                                    {l.location.is_staging && <span className="bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">Recepción</span>}
-                                                </div>
-                                            </td>
-                                            <td className="p-4 text-center align-middle"><span className="font-mono font-bold text-blue-600 text-lg block">{l.current_stock}</span><span className="text-[10px] text-stone-400 uppercase">{product.unit}</span></td>
-                                            <td className="p-4 text-center align-middle bg-orange-50/50 border-l border-stone-100">
-                                                <div className="flex flex-col items-center gap-1"><input type="number" min="0" max={l.current_stock} value={withdraw} onChange={(e) => handleInputChange(l.location.id, e.target.value, l.current_stock)} placeholder="0" className={`w-20 text-center p-2 rounded-lg border-2 outline-none font-bold text-lg transition-all ${isSelected ? 'border-orange-500 text-orange-700 bg-white shadow-sm' : 'border-stone-200 text-stone-400 bg-white focus:border-orange-400'}`} /></div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
-                <div className="p-5 border-t bg-stone-50 flex justify-between items-center flex-none shadow-inner">
-                    <div className="text-stone-400 text-xs hidden sm:block"><p>El stock se reservará temporalmente al agregar.</p></div>
-                    <div className="flex items-center gap-4 w-full sm:w-auto justify-end">
-                        <div className="text-right"><p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">Total a Retirar</p><p className="text-2xl font-black text-stone-800 leading-none">{totalSelected} <span className="text-sm font-normal text-stone-500">{product.unit}</span></p></div>
-                        <button onClick={handleConfirm} disabled={totalSelected <= 0} className="bg-stone-900 text-white px-6 py-3 rounded-xl font-bold hover:bg-black shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-transform active:scale-95 flex items-center gap-2"><Plus size={18}/> Agregar</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// --- COMPONENTE PRINCIPAL ---
-const OutboundDispatch = () => {
+export default function OutboundDispatch() {
   const { user } = useAuth();
-  const navigate = useNavigate();
-  const [mode, setMode] = useState('NEW');
   
+  // Maestros
   const [warehouses, setWarehouses] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [header, setHeader] = useState({ warehouse_id: '', project_id: '', receiver_id: '', destination_zone: '' });
-  const [items, setItems] = useState([]); 
+  const [assignedMaterials, setAssignedMaterials] = useState([]); // Para saber el dueño del material
+
+  // Cabecera
+  const [selectedWarehouse, setSelectedWarehouse] = useState('');
+  const [selectedProject, setSelectedProject] = useState(''); // ID del proyecto
+  const [projectClient, setProjectClient] = useState(''); // Nombre del Cliente del Proyecto (Para filtro)
+  const [receiver, setReceiver] = useState({ name: '', rut: '', plate: '', stage: '' }); // stage = Etapa/Lugar
+
+  // Picking
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [cart, setCart] = useState([]);
   
-  const [showPickingModal, setShowPickingModal] = useState(false);
-  const [pickingProduct, setPickingProduct] = useState(null);
-  const [pickingLocations, setPickingLocations] = useState([]);
-  const [suggestedPrice, setSuggestedPrice] = useState(0);
+  // MODAL DE PICKING
+  const [showPickModal, setShowPickModal] = useState(false);
+  const [pickingProduct, setPickingProduct] = useState(null); // Producto siendo procesado
+  const [pickingLocations, setPickingLocations] = useState([]); // Dónde está ese producto
+  const [pickQuantities, setPickQuantities] = useState({}); // { locationId: cantidad }
 
-  // ESTADO DE ÉXITO: Aquí guardamos los datos para el PDF sin salir de la pantalla
+  // Estado PDF
   const [lastDispatchData, setLastDispatchData] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  // 1. Carga Maestros
+  // 1. Cargar Datos Iniciales
   useEffect(() => {
-      const load = async () => {
-          const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-          const orgId = profile.organization_id;
-          const [w, p, e] = await Promise.all([
-              supabase.from('logis_warehouses').select('*').eq('organization_id', orgId).eq('is_active', true).order('name'),
-              supabase.from('global_projects').select('*').eq('organization_id', orgId).eq('status', 'ACTIVE').order('name'),
-              supabase.from('rrhh_employees').select('id, first_name, last_name, rut').eq('organization_id', orgId).order('first_name')
-          ]);
-          setWarehouses(w.data || []); setProjects(p.data || []); setEmployees(e.data || []);
-          if(w.data?.[0]) setHeader(prev => ({...prev, warehouse_id: w.data[0].id}));
-      };
-      if(user) load();
-  }, [user]);
+    const init = async () => {
+        const { data: wh } = await supabase.from('warehouses').select('*').eq('is_active', true);
+        setWarehouses(wh || []);
+        
+        const { data: pj } = await supabaseProcurement.from('proyectos').select('id, proyecto, cliente').eq('activo', true);
+        setProjects(pj || []);
 
-  // 2. BUSCAR UBICACIONES
-  const handleSelectProduct = async (product) => {
-      setPickingProduct(product);
+        // Cargamos catálogo de asignados para saber dueños
+        const { data: asm } = await supabase.from('assigned_materials').select('code, client_name');
+        setAssignedMaterials(asm || []);
+    };
+    init();
+  }, []);
+
+  // Detectar Cliente al cambiar Proyecto
+  useEffect(() => {
+      if(selectedProject) {
+          const p = projects.find(x => x.id === Number(selectedProject));
+          setProjectClient(p ? p.cliente : '');
+      } else {
+          setProjectClient('');
+      }
+  }, [selectedProject, projects]);
+
+  // 2. Buscar Producto (Con Filtro de Cliente)
+  const handleSearch = async () => {
+    if (!searchQuery || !selectedWarehouse) return alert("Selecciona bodega y escribe algo.");
+    
+    // Buscar en tabla maestra
+    const { data } = await supabase
+        .from('products')
+        .select('*')
+        .ilike('name', `%${searchQuery}%`)
+        .gt('current_stock', 0)
+        .limit(15);
+    
+    // FILTRADO INTELIGENTE:
+    // Mostrar solo si:
+    // A) El producto es GENÉRICO (No está en assigned_materials)
+    // B) O si el producto es ASIGNADO al Cliente del Proyecto seleccionado
+    const filtered = (data || []).filter(prod => {
+        const assignedInfo = assignedMaterials.find(a => a.code === prod.code);
+        
+        if (!assignedInfo) return true; // Es genérico/compra -> Mostrar siempre
+        
+        // Es asignado -> Validar dueño
+        return assignedInfo.client_name === projectClient;
+    });
+    
+    setSearchResults(filtered);
+  };
+
+  // 3. Abrir Modal de Picking
+  const openPickModal = async (product) => {
+    setPickingProduct(product);
+    setPickQuantities({});
+    
+    // Buscar desglose de ubicaciones
+    const { data: rackStock } = await supabase
+        .from('product_locations')
+        .select('*, locations(full_code)')
+        .eq('product_id', product.id)
+        .eq('warehouse_id', selectedWarehouse);
+
+    const totalAllocated = rackStock?.reduce((sum, item) => sum + Number(item.quantity), 0) || 0;
+    const generalStock = product.current_stock - totalAllocated;
+
+    const options = [];
+    if (generalStock > 0) {
+        options.push({ id: 'GENERAL', name: 'RECEPCIÓN / GENERAL - PISO', stock: generalStock, isRack: false });
+    }
+    rackStock?.forEach(r => {
+        if (r.quantity > 0) {
+            options.push({ id: r.id, name: r.locations?.full_code, stock: r.quantity, isRack: true, locationId: r.location_id });
+        }
+    });
+
+    setPickingLocations(options);
+    setShowPickModal(true);
+  };
+
+  // 4. Confirmar Agregado al Carrito
+  const handleConfirmPick = () => {
+      let totalPicked = 0;
+      const newCartItems = [];
+
+      pickingLocations.forEach(loc => {
+          const qty = Number(pickQuantities[loc.id] || 0);
+          if (qty > 0) {
+              totalPicked += qty;
+              newCartItems.push({
+                  uid: Date.now() + Math.random(),
+                  productId: pickingProduct.id,
+                  code: pickingProduct.code,
+                  name: pickingProduct.name,
+                  locationName: loc.name,
+                  quantity: qty,
+                  sourceId: loc.id,
+                  isRack: loc.isRack
+              });
+          }
+      });
+
+      if (totalPicked === 0) return alert("Ingresa una cantidad válida.");
+      
+      setCart([...cart, ...newCartItems]);
+      setShowPickModal(false);
+      setSearchQuery('');
+      setSearchResults([]);
+  };
+
+  // 5. Procesar Despacho
+  const handleDispatch = async () => {
+      if (!selectedWarehouse || !selectedProject || !receiver.name) return alert("Faltan datos obligatorios.");
+      if (cart.length === 0) return alert("Carrito vacío.");
+
+      setIsProcessing(true);
       try {
-          const { data: locations, error: locError } = await supabase.from('logis_inventory')
-              .select(`current_stock, location:location_id (id, zone, section, level, full_code, is_staging)`)
-              .eq('warehouse_id', header.warehouse_id).eq('product_id', product.id).gt('current_stock', 0).order('current_stock', { ascending: false });
-          if (locError) throw locError;
+          const folio = `SAL-${Date.now().toString().slice(-6)}`;
 
-          let detectedPrice = 0;
-          const { data: lastEntry } = await supabase.from('logis_inbound_items').select('unit_price').eq('product_id', product.id).gt('unit_price', 0).order('created_at', { ascending: false }).limit(1);
-          if (lastEntry && lastEntry.length > 0) detectedPrice = lastEntry[0].unit_price;
+          for (const item of cart) {
+              // Movimiento
+              await supabase.from('movements').insert({
+                  type: 'OUTBOUND',
+                  warehouse_id: selectedWarehouse,
+                  product_id: item.productId,
+                  quantity: item.quantity,
+                  project_id: selectedProject,
+                  document_number: folio,
+                  comments: `Despacho a ${receiver.name} (${receiver.stage})`,
+                  other_data: `Origen: ${item.locationName} | Dest: ${receiver.stage}`,
+                  user_email: user?.email
+              });
 
-          setSuggestedPrice(detectedPrice);
-          setPickingLocations(locations ? locations.filter(d => d.location) : []);
-          setShowPickingModal(true);
-      } catch (err) { console.error("Error:", err); alert("Error al cargar datos."); }
-  };
+              // Descuento Global
+              const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.productId).single();
+              if (prod) {
+                  await supabase.from('products').update({ current_stock: prod.current_stock - item.quantity }).eq('id', item.productId);
+              }
 
-  const confirmAddItem = (selectedItems) => {
-      const newLines = selectedItems.map(selection => ({
-          product: pickingProduct,
-          location: selection.location,
-          quantity: selection.quantity,
-          unit_cost: suggestedPrice,
-          total: selection.quantity * suggestedPrice
-      }));
-      setItems(prevItems => [...prevItems, ...newLines]);
-      setShowPickingModal(false); setPickingProduct(null);
-  };
+              // Descuento Rack
+              if (item.isRack) {
+                  const { data: rackItem } = await supabase.from('product_locations').select('quantity').eq('id', item.sourceId).single();
+                  if (rackItem) {
+                      const newQty = rackItem.quantity - item.quantity;
+                      if (newQty <= 0) await supabase.from('product_locations').delete().eq('id', item.sourceId);
+                      else await supabase.from('product_locations').update({ quantity: newQty }).eq('id', item.sourceId);
+                  }
+              }
+          }
 
-  // 4. GUARDAR SALIDA
-  const handleSave = async () => {
-      if(!header.project_id || !header.receiver_id || items.length === 0) return alert("Faltan datos obligatorios.");
-      if(!window.confirm("¿Confirmar Entrega de Materiales?")) return;
+          // Datos PDF
+          const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
+          const prj = projects.find(p => p.id === Number(selectedProject));
+          
+          setLastDispatchData({
+              id: folio, folio, warehouseName: whName,
+              projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
+              stage: receiver.stage,
+              receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
+              items: cart
+          });
 
-      try {
-        const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-        const totalCost = items.reduce((sum, i) => sum + i.total, 0);
+          setCart([]);
+          setReceiver({ name: '', rut: '', plate: '', stage: '' });
+          alert("✅ Despacho realizado.");
 
-        const { data: doc, error: docError } = await supabase.from('logis_outbound_documents').insert({
-            organization_id: profile.organization_id, warehouse_id: header.warehouse_id,
-            project_id: header.project_id, receiver_id: header.receiver_id,
-            destination_zone: header.destination_zone, total_cost: totalCost, created_by: user.id
-        }).select().single();
-        if(docError) throw docError;
-
-        const itemsData = items.map(i => ({ outbound_id: doc.id, product_id: i.product.id, location_id: i.location.id, quantity: i.quantity, unit_cost: i.unit_cost }));
-        await supabase.from('logis_outbound_items').insert(itemsData);
-
-        const movementsData = items.map(i => ({
-            organization_id: profile.organization_id, warehouse_id: header.warehouse_id, product_id: i.product.id, location_id: i.location.id,
-            movement_type: 'OUT', quantity: i.quantity, assigned_to_employee_id: header.receiver_id, user_id: user.id,
-            comments: `Vale #${doc.document_number} / ${header.destination_zone}`
-        }));
-        await supabase.from('logis_movements').insert(movementsData);
-
-        // --- PREPARAR VISTA DE ÉXITO (PDF) ---
-        // Esto reemplaza la redirección al historial
-        const warehouseName = warehouses.find(w => w.id === header.warehouse_id)?.name;
-        const projectName = projects.find(p => p.id === header.project_id)?.name;
-        const receiverEmp = employees.find(e => e.id === header.receiver_id);
-        const receiverName = receiverEmp ? `${receiverEmp.first_name} ${receiverEmp.last_name}` : 'Desconocido';
-
-        setLastDispatchData({
-            document_number: doc.document_number,
-            dispatch_date: new Date().toLocaleDateString(),
-            warehouse_name: warehouseName,
-            project_name: projectName,
-            receiver_name: receiverName,
-            receiver_rut: receiverEmp?.rut,
-            destination_zone: header.destination_zone,
-            total_cost: totalCost,
-            items: items.map(i => ({
-                product_name: i.product.name,
-                location_name: i.location.zone || i.location.name,
-                quantity: i.quantity,
-                unit_cost: i.unit_cost,
-                total: i.total
-            }))
-        });
-
-        // Limpiamos el carro pero NO cambiamos de modo
-        setItems([]);
-
-      } catch (error) { alert(error.message); }
-  };
-
-  const handleNewDispatch = () => {
-      setLastDispatchData(null); setItems([]); setHeader({ ...header, destination_zone: '' });
+      } catch (err) {
+          console.error(err);
+          alert("Error en despacho.");
+      } finally {
+          setIsProcessing(false);
+      }
   };
 
   return (
-    <div className="min-h-screen bg-stone-50 p-8 font-sans text-stone-800">
-      <div className="max-w-6xl mx-auto">
+    <div className="space-y-6 pb-20 relative">
+      
+      {/* Cabecera */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Bodega Origen</label>
+              <select className="w-full border rounded-lg px-3 py-2 bg-slate-50" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
+                  <option value="">-- Seleccionar --</option>
+                  {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+          </div>
+          <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Proyecto Destino (Externo)</label>
+              <select className="w-full border rounded-lg px-3 py-2 bg-slate-50" value={selectedProject} onChange={e => setSelectedProject(e.target.value)}>
+                  <option value="">-- Seleccionar --</option>
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.proyecto} ({p.cliente})</option>)}
+              </select>
+              {projectClient && <p className="text-xs text-blue-600 mt-1 font-bold">Cliente detectado: {projectClient}</p>}
+          </div>
+      </div>
 
-        {/* MODO: NUEVA SALIDA */}
-        {mode === 'NEW' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-6">
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
-                        <h3 className="font-bold text-stone-700 mb-4 flex gap-2 border-b pb-2"><FileText size={18}/> Datos de Entrega</h3>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="col-span-2 md:col-span-1"><label className="label-logis">Bodega Origen</label><select className="input-logis font-bold" value={header.warehouse_id} onChange={e => setHeader({...header, warehouse_id: e.target.value})}>{warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></div>
-                            <div className="col-span-2 md:col-span-1"><label className="label-logis">Proyecto Destino</label><select className="input-logis" value={header.project_id} onChange={e => setHeader({...header, project_id: e.target.value})}><option value="">-- Seleccionar --</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-                            <div className="col-span-2 md:col-span-1"><label className="label-logis">Solicitante (Trabajador)</label><select className="input-logis" value={header.receiver_id} onChange={e => setHeader({...header, receiver_id: e.target.value})}><option value="">-- Seleccionar --</option>{employees.map(e => <option key={e.id} value={e.id}>{e.first_name} {e.last_name}</option>)}</select></div>
-                            <div className="col-span-2 md:col-span-1"><label className="label-logis">Lugar de Uso / Referencia</label><input className="input-logis" placeholder="Ej: Piso 3" maxLength={50} value={header.destination_zone} onChange={e => setHeader({...header, destination_zone: e.target.value})} /></div>
-                        </div>
-                    </div>
+      {/* Datos Receptor */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border">
+          <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><User size={18}/> Receptor y Detalle</h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <input className="border p-2 rounded" placeholder="Nombre" value={receiver.name} onChange={e=>setReceiver({...receiver, name:e.target.value})}/>
+              <input className="border p-2 rounded" placeholder="RUT" value={receiver.rut} onChange={e=>setReceiver({...receiver, rut:e.target.value})}/>
+              <input className="border p-2 rounded" placeholder="Patente (Opc)" value={receiver.plate} onChange={e=>setReceiver({...receiver, plate:e.target.value})}/>
+              <input className="border p-2 rounded bg-yellow-50 border-yellow-200" placeholder="Etapa / Lugar (Ej: Piso 3)" value={receiver.stage} onChange={e=>setReceiver({...receiver, stage:e.target.value})}/>
+          </div>
+      </div>
 
-                    {/* PICKING (Se oculta si hay éxito) */}
-                    <div className={`bg-white p-6 rounded-xl shadow-sm border border-stone-200 ${lastDispatchData ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
-                        <h3 className="font-bold text-stone-700 mb-4 flex gap-2 border-b pb-2"><Package size={18}/> Selección de Material</h3>
-                        <div className="py-4">
-                            <label className="label-logis mb-2">Buscar Producto (Stock Disponible)</label>
-                            <ProductSearchCombobox warehouseId={header.warehouse_id} onSelect={handleSelectProduct} />
-                        </div>
-                    </div>
+      {/* Buscador y Tabla */}
+      {selectedWarehouse && selectedProject && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border h-fit">
+                <div className="flex gap-2 mb-4">
+                    <input className="flex-1 border p-2 rounded" placeholder="Buscar material..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()}/>
+                    <button onClick={handleSearch} className="bg-blue-600 text-white p-2 rounded"><Search size={20}/></button>
                 </div>
-
-                {/* COLUMNA DERECHA: RESUMEN / ÉXITO */}
-                <div className="lg:col-span-1">
-                    <div className="bg-white rounded-xl shadow-lg border overflow-hidden sticky top-24">
-                        
-                        {/* --- VISTA DE ÉXITO (PDF) --- */}
-                        {lastDispatchData ? (
-                            <div className="p-6 text-center animate-fade-in bg-stone-50">
-                                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-emerald-200"><CheckCircle size={32} /></div>
-                                <h3 className="text-xl font-bold text-stone-800">¡Salida Exitosa!</h3>
-                                <p className="text-sm text-stone-500 mb-6 font-mono bg-white inline-block px-3 py-1 rounded border border-stone-200 mt-2">Vale #{lastDispatchData.document_number}</p>
-                                
-                                <div className="space-y-3">
-                                    <PDFDownloadLink 
-                                        document={<DispatchPDF data={lastDispatchData} />} 
-                                        fileName={`Vale_Salida_${lastDispatchData.document_number}.pdf`}
-                                        className="w-full bg-stone-900 text-white py-3 rounded-xl font-bold hover:bg-black shadow-lg flex justify-center items-center gap-2 transition-transform active:scale-95"
-                                    >
-                                        {({ loading }) => loading ? 'Generando...' : <><Download size={18}/> Descargar Vale PDF</>}
-                                    </PDFDownloadLink>
-                                    
-                                    <button 
-                                        onClick={handleNewDispatch} 
-                                        className="w-full bg-white border-2 border-stone-200 text-stone-600 py-3 rounded-xl font-bold hover:bg-stone-50 flex justify-center items-center gap-2 transition-colors"
-                                    >
-                                        <Plus size={18}/> Ingresar Siguiente
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            // --- VISTA NORMAL (CARRO) ---
-                            <>
-                                <div className="bg-stone-100 p-4 font-bold text-stone-700 border-b">Resumen de Salida</div>
-                                <div className="p-4 min-h-[200px] max-h-[400px] overflow-y-auto">
-                                    {items.length === 0 && <p className="text-center text-stone-400 text-sm italic mt-10">Carro vacío.</p>}
-                                    <ul className="space-y-3">
-                                        {items.map((item, idx) => (
-                                            <li key={idx} className="flex justify-between text-sm border-b pb-2 items-center">
-                                                <div>
-                                                    <div className="font-bold text-stone-800">{item.product.name}</div>
-                                                    <div className="text-xs text-stone-500 flex items-center gap-1"><MapPin size={10}/> {item.location.zone}</div>
-                                                </div>
-                                                <div className="text-right flex flex-col items-end">
-                                                    <div className="font-bold text-stone-900">{item.quantity} {item.product.unit}</div>
-                                                    <div className="flex items-center gap-1 mt-1"><span className="text-[10px] text-stone-400">$</span><input type="number" className="w-16 text-right border rounded px-1 py-0.5 text-xs font-mono" value={item.unit_cost} onChange={(e) => { const val = Number(e.target.value); const newItems = [...items]; newItems[idx].unit_cost = val; newItems[idx].total = val * newItems[idx].quantity; setItems(newItems); }} /></div>
-                                                    <button onClick={() => setItems(items.filter((_, i) => i !== idx))} className="text-xs text-red-400 hover:underline mt-1">Quitar</button>
-                                                </div>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                                <div className="p-4 bg-stone-50 border-t space-y-3">
-                                     <button onClick={handleSave} className="w-full bg-red-600 text-white py-3 rounded-lg font-bold hover:bg-red-700 shadow-lg active:scale-95 transition-transform">CONFIRMAR SALIDA</button>
-                                     <button onClick={() => navigate('/inventory')} className="w-full bg-white border border-stone-300 text-stone-600 py-2 rounded-lg font-medium hover:bg-stone-100 flex justify-center items-center gap-2 text-sm"><XCircle size={14}/> Cancelar</button>
-                                </div>
-                            </>
-                        )}
-                    </div>
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {searchResults.map(prod => (
+                        <div key={prod.id} onClick={()=>openPickModal(prod)} className="p-3 border rounded cursor-pointer hover:bg-blue-50 transition-colors flex justify-between items-center">
+                            <div><div className="font-bold text-sm text-slate-700">{prod.name}</div><div className="text-xs text-slate-500">{prod.code}</div></div>
+                            <span className="bg-slate-100 text-xs px-2 py-1 rounded font-bold">{prod.current_stock}</span>
+                        </div>
+                    ))}
                 </div>
             </div>
-        )}
 
-        {showPickingModal && pickingProduct && (
-            <PickingModal product={pickingProduct} locations={pickingLocations} onClose={() => { setShowPickingModal(false); setPickingProduct(null); }} onConfirm={confirmAddItem} suggestedPrice={suggestedPrice} />
-        )}
+            <div className="lg:col-span-7 bg-slate-50 p-6 rounded-xl border flex flex-col">
+                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><Truck size={18}/> Carrito de Salida</h3>
+                <div className="flex-1 bg-white rounded-lg border overflow-hidden mb-4 min-h-[200px]">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-100 font-bold text-xs uppercase"><tr><th className="p-3">Item</th><th className="p-3">Origen</th><th className="p-3 text-center">Cant</th><th className="p-3"></th></tr></thead>
+                        <tbody>
+                            {cart.map((item, i) => (
+                                <tr key={i}>
+                                    <td className="p-3"><div className="font-bold">{item.name}</div><div className="text-xs text-slate-400">{item.code}</div></td>
+                                    <td className="p-3 text-xs text-blue-600">{item.locationName}</td>
+                                    <td className="p-3 text-center font-bold">{item.quantity}</td>
+                                    <td className="p-3 text-right"><button onClick={()=>setCart(cart.filter((_, idx)=>idx!==i))} className="text-red-400"><X size={16}/></button></td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+                <div className="flex justify-end gap-3">
+                    {lastDispatchData && <PDFDownloadLink document={<DispatchDocument data={lastDispatchData}/>} fileName="Despacho.pdf"><button className="text-blue-600 px-4 py-2 font-bold bg-white border rounded">Descargar PDF</button></PDFDownloadLink>}
+                    <button onClick={handleDispatch} disabled={isProcessing||cart.length===0} className="bg-orange-600 text-white px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2">{isProcessing?<Loader className="animate-spin"/>:'Confirmar Salida'}</button>
+                </div>
+            </div>
+        </div>
+      )}
 
-        {/* MODO: HISTORIAL CONECTADO (Usando el componente externo) */}
-        {mode === 'HISTORY' && <DispatchHistory />}
-      </div>
-      <style>{` .label-logis { display: block; font-size: 0.75rem; font-weight: 700; color: #78716c; margin-bottom: 0.25rem; text-transform: uppercase; } .input-logis { width: 100%; border: 1px solid #d6d3d1; padding: 0.5rem; border-radius: 0.5rem; font-size: 0.875rem; outline: none; transition: all 0.2s; } .input-logis:focus { border-color: #f97316; ring: 2px; ring-color: #fdba74; } `}</style>
+      {/* MODAL PICKING */}
+      {showPickModal && pickingProduct && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in duration-200">
+                <div className="p-5 border-b bg-slate-50 flex justify-between items-center">
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Package className="text-orange-500"/> Distribución de Retiro</h3>
+                        <p className="text-sm text-slate-500">{pickingProduct.name} ({pickingProduct.code})</p>
+                    </div>
+                    <button onClick={()=>setShowPickModal(false)}><X size={24} className="text-slate-400"/></button>
+                </div>
+                
+                <div className="p-0 max-h-[60vh] overflow-y-auto">
+                    <table className="w-full text-left">
+                        <thead className="bg-slate-100 text-slate-500 text-xs uppercase font-bold sticky top-0">
+                            <tr><th className="p-4">Ubicación / Zona</th><th className="p-4 text-center">Stock Actual</th><th className="p-4 text-center w-32">A Retirar</th></tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {pickingLocations.map(loc => (
+                                <tr key={loc.id} className="hover:bg-slate-50">
+                                    <td className="p-4">
+                                        <div className="font-bold text-slate-700">{loc.name}</div>
+                                        <div className="text-xs text-slate-400">{loc.isRack ? 'Estantería' : 'Piso / Recepción'}</div>
+                                    </td>
+                                    <td className="p-4 text-center">
+                                        <div className="text-lg font-bold text-blue-600">{loc.stock}</div>
+                                        <div className="text-[10px] text-slate-400">UN</div>
+                                    </td>
+                                    <td className="p-4">
+                                        <input 
+                                            type="number" 
+                                            min="0" 
+                                            max={loc.stock} 
+                                            className="w-full border-2 border-slate-200 rounded-lg p-2 text-center font-bold text-lg focus:border-blue-500 outline-none"
+                                            placeholder="0"
+                                            onChange={(e) => {
+                                                const val = Math.min(Number(e.target.value), loc.stock);
+                                                setPickQuantities({...pickQuantities, [loc.id]: val});
+                                            }}
+                                        />
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div className="p-5 border-t bg-slate-50 flex justify-between items-center">
+                    <div className="text-sm text-slate-500">
+                        Total a retirar: <span className="font-bold text-slate-800 text-lg ml-2">
+                            {Object.values(pickQuantities).reduce((a, b) => a + Number(b), 0)} UN
+                        </span>
+                    </div>
+                    <button onClick={handleConfirmPick} className="bg-slate-800 text-white px-6 py-3 rounded-lg font-bold hover:bg-black shadow-lg flex items-center gap-2">
+                        <Plus size={18}/> Agregar al Carrito
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
     </div>
   );
-};
-
-export default OutboundDispatch;
+}

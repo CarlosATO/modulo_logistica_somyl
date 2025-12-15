@@ -2,181 +2,271 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Package, Warehouse, ArrowLeft, Grid } from 'lucide-react';
+import { 
+  ArrowRight, Package, Warehouse, ArrowLeft, Grid, 
+  MapPin, Move, CheckCircle, Loader, AlertCircle, RefreshCw 
+} from 'lucide-react';
 
 const PutAway = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  
   const [warehouses, setWarehouses] = useState([]);
   const [selectedWarehouse, setSelectedWarehouse] = useState('');
-  const [stagingItems, setStagingItems] = useState([]);
-  const [locations, setLocations] = useState([]);
   
-  // Estado para mover
+  // Listas de datos
+  const [stagingItems, setStagingItems] = useState([]); 
+  const [locations, setLocations] = useState([]);       
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
+  
+  // Estado de la acción
   const [selectedItem, setSelectedItem] = useState(null);
   const [targetLocation, setTargetLocation] = useState('');
-  const [quantityToMove, setQuantityToMove] = useState('');
+  const [moveQty, setMoveQty] = useState(''); 
 
-  // Cargar Bodegas
+  // 1. Cargar Bodegas
   useEffect(() => {
       const load = async () => {
-          if (!user) return;
-          const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-          if (profile) {
-              const { data } = await supabase.from('logis_warehouses').select('*').eq('organization_id', profile.organization_id).eq('is_active', true);
-              setWarehouses(data || []);
-              if(data?.[0]) setSelectedWarehouse(data[0].id);
-          }
+          const { data } = await supabase.from('warehouses').select('*').eq('is_active', true).order('name');
+          setWarehouses(data || []);
+          if(data && data.length > 0) setSelectedWarehouse(data[0].id);
       };
       load();
-  }, [user]);
+  }, []);
 
-  // Cargar Datos de la Bodega
+  // 2. Cargar Inventario
   const fetchData = useCallback(async () => {
       if(!selectedWarehouse) return;
       
-      // 1. Buscar zona RECEPCIÓN
-      const { data: receptionLoc } = await supabase.from('logis_locations').select('id').eq('warehouse_id', selectedWarehouse).eq('is_staging', true).single();
+      setLoadingItems(true);
+      setErrorMsg(null);
+      setStagingItems([]);
+      setSelectedItem(null);
+      setMoveQty('');
       
-      if(receptionLoc) {
-          // PROTECCIÓN: Traemos los datos del producto. Si falla el join, product será null.
-          const { data: inventory } = await supabase.from('logis_inventory')
-            .select('*, product:product_id(name, sku, unit)')
-            .eq('location_id', receptionLoc.id)
-            .gt('current_stock', 0);
-          setStagingItems(inventory || []);
-      } else {
-          setStagingItems([]);
+      try {
+          // A. Ubicaciones
+          const { data: locs } = await supabase.from('locations').select('*').eq('warehouse_id', selectedWarehouse).order('full_code');
+          setLocations(locs || []);
+
+          // B. Movimientos (Historial de todo lo que ha entrado/salido)
+          const { data: movements, error: movErr } = await supabase
+            .from('movements')
+            .select('*') // Traemos todo para evitar errores de columnas faltantes
+            .eq('warehouse_id', selectedWarehouse);
+
+          if (movErr) throw movErr;
+
+          // C. Stock ya ubicado en Racks (Lo que ya ordenaste)
+          const { data: allocatedStock, error: allErr } = await supabase
+            .from('product_locations')
+            .select('product_id, quantity')
+            .eq('warehouse_id', selectedWarehouse);
+            
+          if (allErr) throw allErr;
+
+          // --- CÁLCULOS MATEMÁTICOS ---
+          
+          // 1. Calcular Stock Total Teórico en Bodega (Según Kárdex)
+          const stockInWarehouseMap = {};
+          
+          movements?.forEach(m => {
+              if (!m.product_id) return;
+              const qty = Number(m.quantity);
+              
+              if (!stockInWarehouseMap[m.product_id]) stockInWarehouseMap[m.product_id] = 0;
+              
+              // SUMAR: Compras (INBOUND) y Traspasos Recibidos (TRANSFER_IN)
+              if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') {
+                  stockInWarehouseMap[m.product_id] += qty;
+              }
+              
+              // RESTAR: Salidas (OUTBOUND) y Traspasos Enviados (TRANSFER_OUT)
+              if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') {
+                  stockInWarehouseMap[m.product_id] -= qty;
+              }
+          });
+
+          // 2. Calcular Stock ya guardado en Racks
+          const allocatedMap = {};
+          allocatedStock?.forEach(item => {
+              allocatedMap[item.product_id] = (allocatedMap[item.product_id] || 0) + Number(item.quantity);
+          });
+
+          // 3. Cruzar datos: (Lo que tengo en total) - (Lo que ya guardé) = (Lo que falta por guardar)
+          const productIds = Object.keys(stockInWarehouseMap);
+          
+          if (productIds.length > 0) {
+              const { data: products } = await supabase.from('products').select('*').in('id', productIds);
+              
+              const pendingItems = [];
+              products?.forEach(p => {
+                  const totalHere = stockInWarehouseMap[p.id] || 0;
+                  const inRacks = allocatedMap[p.id] || 0;
+                  const pending = totalHere - inRacks;
+
+                  // Solo mostramos si hay pendiente positivo (ej: llegaron 10, guardé 0 -> Muestro 10)
+                  if (pending > 0) {
+                      pendingItems.push({
+                          ...p,
+                          pending_stock: pending,
+                          total_stock: totalHere
+                      });
+                  }
+              });
+              setStagingItems(pendingItems);
+          } else {
+              setStagingItems([]);
+          }
+
+      } catch (error) {
+          console.error("Error cargando datos:", error);
+          setErrorMsg("Error al calcular stock.");
+      } finally {
+          setLoadingItems(false);
       }
-
-      // 2. Traer ubicaciones destino
-      // NOTA: Ordenamos por ZONE para que coincida con tu base de datos nueva
-      const { data: locs } = await supabase.from('logis_locations')
-        .select('*')
-        .eq('warehouse_id', selectedWarehouse)
-        .eq('is_staging', false)
-        .order('zone') 
-        .order('section')
-        .order('level');
-      setLocations(locs || []);
-
   }, [selectedWarehouse]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // MOVER STOCK
+  // Selección de ítem
+  const handleSelectItem = (item) => {
+      setSelectedItem(item);
+      setMoveQty(item.pending_stock); 
+      setTargetLocation('');
+  };
+
+  // Guardar ubicación (Put Away)
   const handleMove = async () => {
-      if(!selectedItem || !targetLocation || !quantityToMove) return;
+      if(!selectedItem || !targetLocation) return alert("Faltan datos.");
+      const qty = Number(moveQty);
+      if(qty <= 0 || qty > selectedItem.pending_stock) return alert("Cantidad inválida.");
+
       try {
-          const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-          
-          // 1. SALIDA DE RECEPCIÓN
-          const { error: outError } = await supabase.from('logis_movements').insert({
-              organization_id: profile.organization_id, warehouse_id: selectedWarehouse,
-              product_id: selectedItem.product_id, location_id: selectedItem.location_id,
-              movement_type: 'TRANSFER_OUT', quantity: Number(quantityToMove),
-              user_id: user.id, comments: 'Put-away'
-          });
-          if(outError) throw outError;
+          const locObj = locations.find(l => l.id === targetLocation);
+          const fullCode = locObj ? locObj.full_code : 'Bodega';
 
-          // 2. ENTRADA A UBICACIÓN FINAL
-          const { error: inError } = await supabase.from('logis_movements').insert({
-              organization_id: profile.organization_id, warehouse_id: selectedWarehouse,
-              product_id: selectedItem.product_id, location_id: targetLocation,
-              movement_type: 'TRANSFER_IN', quantity: Number(quantityToMove),
-              user_id: user.id, comments: 'Put-away'
-          });
-          if(inError) throw inError;
+          // 1. Guardar o Actualizar en Racks (product_locations)
+          // Primero verificamos si ya existe ese producto en esa ubicación para sumar
+          const { data: existingLoc } = await supabase.from('product_locations')
+             .select('id, quantity')
+             .eq('location_id', targetLocation)
+             .eq('product_id', selectedItem.id)
+             .maybeSingle();
 
-          alert("Material ubicado correctamente.");
-          setSelectedItem(null); setQuantityToMove(''); setTargetLocation('');
-          fetchData();
-      } catch (error) { alert(error.message); }
+          if (existingLoc) {
+             // Update (Sumar)
+             await supabase.from('product_locations')
+                .update({ quantity: Number(existingLoc.quantity) + qty })
+                .eq('id', existingLoc.id);
+          } else {
+             // Insert (Nuevo)
+             await supabase.from('product_locations').insert({
+                product_id: selectedItem.id,
+                warehouse_id: selectedWarehouse,
+                location_id: targetLocation,
+                quantity: qty
+             });
+          }
+
+          // 2. Registrar Movimiento PUTAWAY (Solo para trazabilidad interna, no afecta stock total)
+          await supabase.from('movements').insert({
+              type: 'PUTAWAY',
+              warehouse_id: selectedWarehouse,
+              quantity: qty,
+              product_id: selectedItem.id,
+              comments: `Ubicado: ${qty} UN en ${fullCode}`,
+              other_data: `COD: ${selectedItem.code} | Loc: ${fullCode}`,
+              user_email: user?.email
+          });
+
+          alert(`✅ Guardado en ${fullCode}`);
+          fetchData(); 
+
+      } catch (error) { 
+          console.error(error);
+          alert("Error al guardar: " + error.message); 
+      }
   };
 
   return (
-    <div className="min-h-screen bg-stone-50 font-sans text-stone-800">
+    <div className="min-h-screen bg-stone-50 font-sans text-stone-800 pb-20">
+      
+      {/* HEADER */}
+      <div className="bg-white border-b border-stone-200 shadow-sm sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-800 rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-md"><Move size={20} /></div>
+                <div><h1 className="text-xl font-bold text-stone-900">Orden de Bodega</h1><p className="text-xs text-stone-500">Distribución física</p></div>
+            </div>
+            <div className="flex gap-3">
+                <button onClick={() => fetchData()} className="p-2 bg-stone-100 hover:bg-stone-200 rounded-full"><RefreshCw size={20}/></button>
+                <button onClick={() => navigate('/gestion/ubicaciones')} className="px-4 py-2 bg-stone-100 border rounded-lg text-sm font-bold flex gap-2"><Grid size={16}/> Configurar Racks</button>
+                <button onClick={() => navigate('/gestion')} className="px-4 py-2 bg-white border rounded-lg text-sm font-bold flex gap-2"><ArrowLeft size={16}/> Volver</button>
+            </div>
+        </div>
+      </div>
 
-      <div className="max-w-6xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-6 py-8">
         
+        {/* SELECTOR BODEGA */}
         <div className="bg-white p-4 rounded-xl shadow-sm border mb-6 flex items-center gap-4">
-            <Warehouse className="text-stone-400" />
+            <div className="p-3 bg-stone-100 rounded-full"><Warehouse className="text-stone-500" /></div>
             <div className="flex-1">
-                <label className="block text-[10px] font-bold text-stone-400 uppercase tracking-wider">Bodega Operativa</label>
-                <select className="bg-transparent font-bold text-stone-800 outline-none text-lg w-full cursor-pointer" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
+                <label className="block text-[10px] font-bold text-stone-400 uppercase">Bodega Operativa</label>
+                <select className="bg-transparent font-bold text-lg w-full outline-none cursor-pointer" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
                     {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                 </select>
             </div>
         </div>
 
+        {errorMsg && (
+            <div className="mb-6 bg-red-50 border border-red-200 p-4 rounded-xl flex items-center gap-3 text-red-700">
+                <AlertCircle size={24}/>
+                <div><p className="font-bold">Error</p><p className="text-sm">{errorMsg}</p></div>
+            </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            
-            {/* IZQUIERDA: RECEPCIÓN */}
-            <div className="bg-blue-50 p-6 rounded-xl border border-blue-100 shadow-sm">
-                <h3 className="font-bold text-blue-800 mb-4 flex justify-between items-center">
-                    <span>ZONA DE RECEPCIÓN</span>
-                    <span className="bg-blue-200 text-blue-900 text-xs px-2 py-1 rounded-full font-bold">{stagingItems.length} Ítems</span>
+            {/* IZQUIERDA: PENDIENTES */}
+            <div className="bg-blue-50/50 p-6 rounded-xl border border-blue-100 shadow-sm flex flex-col h-[600px]">
+                <h3 className="font-bold text-blue-900 mb-4 flex justify-between">
+                    <span className="flex gap-2 items-center"><Package size={18}/> RECEPCIÓN / SIN UBICAR</span>
+                    <span className="bg-blue-200 text-blue-800 text-xs px-2 py-1 rounded-full">{stagingItems.length}</span>
                 </h3>
-                <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-                    {stagingItems.length === 0 && <div className="text-center py-10 opacity-50"><Package size={40} className="mx-auto mb-2"/><p className="text-sm font-medium">Todo ordenado.</p></div>}
-                    {stagingItems.map(item => (
-                        <div key={item.id} onClick={() => { setSelectedItem(item); setQuantityToMove(item.current_stock); }}
-                            className={`bg-white p-4 rounded-lg shadow-sm cursor-pointer border-l-4 transition-all ${selectedItem?.id === item.id ? 'border-blue-600 ring-2 ring-blue-200 translate-x-2' : 'border-transparent hover:shadow-md'}`}>
-                            <div className="flex justify-between items-center">
-                                {/* PROTECCIÓN AQUÍ: Usamos ?. para evitar pantalla blanca */}
-                                <span className="font-bold text-stone-800 text-sm">{item.product?.name || 'Producto Desconocido'}</span>
-                                <span className="font-mono font-bold text-blue-600 text-sm">{item.current_stock} {item.product?.unit || 'UN'}</span>
+                
+                <div className="overflow-y-auto flex-1 space-y-3 pr-2">
+                    {loadingItems ? <div className="text-center py-20 text-blue-400"><Loader className="animate-spin mx-auto mb-2"/> Buscando stock...</div> : 
+                     stagingItems.length === 0 ? <div className="text-center py-20 opacity-40"><Package size={48} className="mx-auto mb-2"/><p>Todo ordenado.</p></div> : 
+                     stagingItems.map(item => (
+                        <div key={item.id} onClick={() => handleSelectItem(item)} className={`bg-white p-4 rounded-xl border-2 cursor-pointer transition-all relative ${selectedItem?.id === item.id ? 'border-blue-500 ring-4 ring-blue-100' : 'border-transparent hover:border-blue-200'}`}>
+                            <div className="flex justify-between">
+                                <div><span className="text-xs font-mono text-stone-400 block">{item.code}</span><span className="font-bold text-stone-800 text-sm">{item.name}</span></div>
+                                <div className="text-right"><span className="block font-black text-lg text-blue-600">{item.pending_stock}</span><span className="text-[10px] text-stone-400">Pendiente</span></div>
                             </div>
-                            <div className="text-xs text-stone-400 font-mono mt-1">{item.product?.sku || 'S/N'}</div>
+                            {selectedItem?.id === item.id && <div className="absolute top-0 right-0 p-1 bg-blue-500 rounded-bl-lg text-white"><ArrowRight size={14}/></div>}
                         </div>
-                    ))}
+                     ))
+                    }
                 </div>
             </div>
 
-            {/* DERECHA: MOVER */}
-            <div className="flex flex-col justify-center">
+            {/* DERECHA: ACCIÓN */}
+            <div className="flex flex-col h-full">
                 {selectedItem ? (
-                    <div className="bg-white p-8 rounded-xl shadow-lg border border-stone-200 animate-fade-in sticky top-24">
-                        <h3 className="text-xl font-bold text-stone-800 mb-6 text-center border-b pb-4">Mover a Estantería</h3>
-                        <div className="mb-6 text-center bg-stone-50 p-4 rounded-lg border border-stone-100">
-                            <p className="text-xs text-stone-500 uppercase tracking-wider mb-1">Producto</p>
-                            {/* PROTECCIÓN AQUÍ TAMBIÉN */}
-                            <p className="text-lg font-bold text-blue-600">{selectedItem.product?.name || 'Desconocido'}</p>
-                            <p className="text-xs text-stone-400 mt-1">Disponible: {selectedItem.current_stock}</p>
-                        </div>
+                    <div className="bg-white p-8 rounded-xl shadow-xl border border-stone-200 sticky top-24 animate-in slide-in-from-right-4">
+                        <div className="text-center mb-6"><div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3"><Move size={28}/></div><h3 className="text-lg font-black text-stone-800">Ubicar en Rack</h3></div>
                         <div className="space-y-5">
-                            <div>
-                                <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Cantidad a Mover</label>
-                                <div className="relative">
-                                    <input type="number" className="w-full border-2 border-stone-200 p-3 rounded-lg font-mono text-lg text-center focus:border-blue-500 outline-none transition-colors" value={quantityToMove} onChange={e => setQuantityToMove(e.target.value)} />
-                                    <span className="absolute right-4 top-3.5 text-sm text-stone-400 font-bold">{selectedItem.product?.unit}</span>
-                                </div>
-                            </div>
-                            <div className="flex justify-center py-2 text-stone-300"><ArrowRight size={32} /></div>
-                            <div>
-                                <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Destino</label>
-                                <select className="w-full border-2 border-stone-200 p-3 rounded-lg bg-white font-bold text-stone-700 focus:border-orange-500 outline-none" value={targetLocation} onChange={e => setTargetLocation(e.target.value)}>
-                                    <option value="">-- Seleccionar Ubicación --</option>
-                                    {locations.map(l => (
-                                        // Mostramos Full Code, Zona, Sección y Nivel
-                                        <option key={l.id} value={l.id}>
-                                            {l.full_code ? `[${l.full_code}]` : ''} {l.zone} - {l.section} - {l.level}
-                                        </option>
-                                    ))}
-                                </select>
-                                {locations.length === 0 && <p className="text-xs text-red-500 mt-1 font-bold">⚠️ No hay ubicaciones creadas.</p>}
-                            </div>
-                            <button onClick={handleMove} className="w-full bg-stone-900 text-white py-4 rounded-xl font-bold hover:bg-black shadow-lg transition-transform active:scale-95 mt-4 text-sm uppercase tracking-wider">Confirmar Ubicación</button>
+                            <div><label className="text-xs font-bold text-stone-500 uppercase">Cantidad a Guardar</label><div className="flex items-center gap-2"><input type="number" className="flex-1 border-2 border-blue-200 p-3 rounded-xl font-black text-2xl text-center text-blue-600 focus:border-blue-500 outline-none" value={moveQty} onChange={(e) => setMoveQty(e.target.value)} /><span className="text-xs font-bold text-stone-400">/ {selectedItem.pending_stock}</span></div></div>
+                            <div><label className="text-xs font-bold text-stone-500 uppercase flex gap-2 mb-2"><MapPin size={14}/> Destino Físico</label><select className="w-full border-2 border-stone-200 p-3 rounded-xl bg-white font-bold text-stone-700 outline-none" value={targetLocation} onChange={e => setTargetLocation(e.target.value)}><option value="">-- Seleccionar --</option>{locations.map(l => <option key={l.id} value={l.id}>{l.full_code} ({l.zone})</option>)}</select></div>
+                            <button onClick={handleMove} disabled={!targetLocation || !moveQty} className="w-full bg-stone-900 text-white py-4 rounded-xl font-bold hover:bg-black shadow-lg flex justify-center gap-2"><CheckCircle size={20}/> Confirmar Ubicación</button>
                         </div>
                     </div>
                 ) : (
-                    <div className="text-center text-stone-400 border-2 border-dashed border-stone-200 rounded-xl p-12 h-full flex flex-col justify-center items-center bg-stone-50/50">
-                        <Package size={48} className="mb-4 opacity-20" />
-                        <p className="font-medium">Selecciona un ítem de la izquierda.</p>
-                    </div>
+                    <div className="h-full border-2 border-dashed border-stone-200 rounded-xl flex flex-col justify-center items-center bg-stone-50/50 text-stone-400 p-8"><Package size={48} className="opacity-30 mb-2"/><p>Selecciona un ítem de la izquierda</p></div>
                 )}
             </div>
-
         </div>
       </div>
     </div>

@@ -1,274 +1,293 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
+import { 
+  Search, Plus, MapPin, User, Warehouse, 
+  Edit, Power, Save, X, Copy, Map, Share2 
+} from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
-import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { Warehouse, MapPin, Plus, Edit, Search, LayoutGrid, List as ListIcon, Archive, CheckCircle, XCircle } from 'lucide-react';
 
-const WarehouseSettings = () => {
-  const { user } = useAuth();
-  const navigate = useNavigate();
+export default function WarehouseSettings() {
   const [warehouses, setWarehouses] = useState([]);
   const [loading, setLoading] = useState(true);
-  
-  // Filtros y Vistas
-  const [viewMode, setViewMode] = useState('grid');
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('ALL'); // ALL, ACTIVE, INACTIVE
-
-  // Estado Modal
+  
+  // Estado para el Modal
   const [showModal, setShowModal] = useState(false);
-  const [editingWarehouse, setEditingWarehouse] = useState(null);
-  const [formData, setFormData] = useState({ 
-      name: '', code: '', location: '', type: 'CENTRAL', description: '', is_active: true 
+  const [editingId, setEditingId] = useState(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    code: '',
+    address: '',
+    commune: '', // NUEVO
+    georef: '',  // NUEVO
+    manager: '',
+    is_active: true
   });
 
-  // 1. Cargar Bodegas
-  const fetchWarehouses = useCallback(async () => {
+  useEffect(() => {
+    fetchWarehouses();
+  }, []);
+
+  const fetchWarehouses = async () => {
     try {
       setLoading(true);
-      const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-      if (profile) {
-          const { data, error } = await supabase
-            .from('logis_warehouses')
-            .select('*')
-            .eq('organization_id', profile.organization_id)
-            .order('is_active', { ascending: false }) // Activas primero
-            .order('name');
-          
-          if (error) throw error;
-          setWarehouses(data || []);
-      }
-    } catch (error) { console.error(error); } finally { setLoading(false); }
-  }, [user]);
+      const { data, error } = await supabase
+        .from('warehouses')
+        .select('*')
+        .order('name', { ascending: true });
 
-  useEffect(() => { if (user) fetchWarehouses(); }, [user, fetchWarehouses]);
-
-  // 2. Filtrado Inteligente
-  const filteredWarehouses = useMemo(() => {
-      return warehouses.filter(w => {
-          const matchText = w.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            w.code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                            w.location?.toLowerCase().includes(searchTerm.toLowerCase());
-          
-          let matchStatus = true;
-          if (filterStatus === 'ACTIVE') matchStatus = w.is_active === true;
-          if (filterStatus === 'INACTIVE') matchStatus = w.is_active === false;
-
-          return matchText && matchStatus;
-      });
-  }, [warehouses, searchTerm, filterStatus]);
-
-  // 3. Handlers CRUD
-  const handleOpenCreate = () => {
-      setEditingWarehouse(null);
-      setFormData({ name: '', code: '', location: '', type: 'CENTRAL', description: '', is_active: true });
-      setShowModal(true);
+      if (error) throw error;
+      setWarehouses(data);
+    } catch (error) {
+      console.error('Error cargando bodegas:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleOpenEdit = (wh) => {
-      setEditingWarehouse(wh);
+  const handleOpenModal = (warehouse = null) => {
+    if (warehouse) {
+      setEditingId(warehouse.id);
       setFormData({
-          name: wh.name,
-          code: wh.code || '',
-          location: wh.location || '',
-          type: wh.type,
-          description: wh.description || '',
-          is_active: wh.is_active
+        name: warehouse.name,
+        code: warehouse.code,
+        address: warehouse.address || '',
+        commune: warehouse.commune || '', // NUEVO
+        georef: warehouse.georef || '',   // NUEVO
+        manager: warehouse.manager || '',
+        is_active: warehouse.is_active
       });
-      setShowModal(true);
+    } else {
+      setEditingId(null);
+      setFormData({ 
+        name: '', code: '', address: '', 
+        commune: '', georef: '', manager: '', 
+        is_active: true 
+      });
+    }
+    setShowModal(true);
   };
 
   const handleSave = async (e) => {
-      e.preventDefault();
-      try {
-          const { data: profile } = await supabase.from('profiles').select('organization_id').eq('id', user.id).single();
-          
-          const payload = {
-              organization_id: profile.organization_id,
-              name: formData.name,
-              code: formData.code.toUpperCase(), // Códigos siempre en mayúscula
-              location: formData.location,
-              type: formData.type,
-              description: formData.description,
-              is_active: formData.is_active
-          };
-
-          if (editingWarehouse) {
-              const { error } = await supabase.from('logis_warehouses').update(payload).eq('id', editingWarehouse.id);
-              if (error) throw error;
-          } else {
-              const { error } = await supabase.from('logis_warehouses').insert(payload);
-              if (error) throw error;
-          }
-
-          alert("Ubicación guardada correctamente.");
-          setShowModal(false);
-          fetchWarehouses();
-      } catch (error) { alert("Error: " + error.message); }
-  };
-
-  // Helpers de UI
-  const getTypeBadge = (type) => {
-      switch (type) {
-          case 'CENTRAL': return 'bg-blue-100 text-blue-700 border-blue-200';
-          case 'OBRA': return 'bg-orange-100 text-orange-700 border-orange-200';
-          case 'MOVIL': return 'bg-purple-100 text-purple-700 border-purple-200';
-          default: return 'bg-gray-100 border-gray-200';
+    e.preventDefault();
+    try {
+      const payload = { ...formData };
+      
+      let error;
+      if (editingId) {
+        const { error: updateError } = await supabase
+          .from('warehouses')
+          .update(payload)
+          .eq('id', editingId);
+        error = updateError;
+      } else {
+        const { error: insertError } = await supabase
+          .from('warehouses')
+          .insert([payload]);
+        error = insertError;
       }
+
+      if (error) throw error;
+
+      await fetchWarehouses();
+      setShowModal(false);
+      alert(editingId ? 'Bodega actualizada' : 'Bodega creada exitosamente');
+
+    } catch (error) {
+      console.error('Error guardando:', error);
+      alert('Error al guardar. Verifica los datos.');
+    }
   };
+
+  const handleToggleStatus = async (id, currentStatus) => {
+    const action = currentStatus ? 'desactivar' : 'activar';
+    if (!window.confirm(`¿Estás seguro de que quieres ${action} esta bodega?`)) return;
+
+    try {
+      const { error } = await supabase
+        .from('warehouses')
+        .update({ is_active: !currentStatus })
+        .eq('id', id);
+
+      if (error) throw error;
+      fetchWarehouses();
+    } catch (error) {
+      console.error('Error cambiando estado:', error);
+    }
+  };
+
+  // --- FUNCIÓN DE COPIAR DATOS ---
+  const handleCopyInfo = (w) => {
+    // Formato amigable para WhatsApp/Email
+    const textToCopy = `
+📍 *DATOS DE BODEGA*
+🏠 *${w.name}* (${w.code})
+-------------------------
+🗺️ *Dirección:* ${w.address || 'S/N'}
+🏙️ *Comuna:* ${w.commune || '-'}
+📌 *Coordenadas:* ${w.georef || 'No registradas'}
+👤 *Encargado:* ${w.manager || 'No asignado'}
+    `.trim();
+
+    navigator.clipboard.writeText(textToCopy)
+      .then(() => alert('📋 ¡Datos copiados al portapapeles!'))
+      .catch(err => console.error('Error al copiar:', err));
+  };
+
+  const filteredWarehouses = warehouses.filter(w => 
+    w.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    w.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (w.commune && w.commune.toLowerCase().includes(searchTerm.toLowerCase()))
+  );
 
   return (
-    <div className="min-h-screen bg-stone-50 p-8">
-      <div className="max-w-7xl mx-auto">
-
-        {/* Toolbar */}
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 mb-6 flex flex-col md:flex-row gap-4 items-center justify-between">
-            <div className="flex flex-wrap gap-3 items-center w-full md:w-auto">
-                <div className="relative w-full md:w-64">
-                    <Search className="absolute left-3 top-2.5 text-stone-400" size={18} />
-                    <input type="text" placeholder="Buscar bodega o código..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-10 pr-4 py-2 border border-stone-300 rounded-lg w-full focus:ring-2 focus:ring-orange-500 outline-none text-sm" />
-                </div>
-                <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-stone-300 p-2 rounded-lg text-sm bg-stone-50 font-medium">
-                    <option value="ALL">Todos los Estados</option>
-                    <option value="ACTIVE">Operativas</option>
-                    <option value="INACTIVE">Cerradas / Inactivas</option>
-                </select>
-            </div>
-
-            <div className="flex bg-stone-100 p-1 rounded-lg">
-                <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-white shadow text-orange-600' : 'text-stone-400'}`}><LayoutGrid size={18} /></button>
-                <button onClick={() => setViewMode('list')} className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-white shadow text-orange-600' : 'text-stone-400'}`}><ListIcon size={18} /></button>
-            </div>
+    <div className="space-y-6">
+      
+      {/* Header */}
+      <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+        <div>
+           <h2 className="text-xl font-bold text-slate-800">Maestro de Bodegas</h2>
+           <p className="text-xs text-slate-500">Gestión de almacenes y ubicaciones geográficas</p>
         </div>
+        <div className="flex gap-2 w-full md:w-auto">
+          <div className="relative flex-1 md:w-64">
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+            <input 
+              type="text" 
+              placeholder="Buscar por nombre, código o comuna..." 
+              className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <button onClick={() => handleOpenModal()} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors font-medium text-sm">
+            <Plus size={18} /> Nueva Bodega
+          </button>
+        </div>
+      </div>
 
-        {/* --- VISTA GRILLA --- */}
-        {viewMode === 'grid' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredWarehouses.map(w => (
-                    <div key={w.id} className={`bg-white p-6 rounded-xl shadow-sm border hover:shadow-md transition-all group relative ${!w.is_active ? 'opacity-75 bg-stone-50' : 'border-stone-200'}`}>
-                        <div className="flex justify-between items-start mb-4">
-                            <div className={`p-3 rounded-lg border ${!w.is_active ? 'bg-gray-200 text-gray-500 border-gray-300' : getTypeBadge(w.type).replace('text-', 'bg-').split(' ')[0] + ' text-white'}`}>
-                                <Warehouse size={24} />
-                            </div>
-                            <div className="flex flex-col items-end gap-1">
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase border ${getTypeBadge(w.type)}`}>{w.type}</span>
-                                {!w.is_active && <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-red-100 text-red-600 border border-red-200">Cerrada</span>}
-                            </div>
-                        </div>
-                        
-                        <h3 className="text-lg font-bold text-stone-800 mb-0 flex items-center gap-2">
-                            {w.name}
-                        </h3>
-                        <span className="text-xs font-mono text-stone-400 bg-stone-100 px-1.5 rounded">{w.code || 'S/C'}</span>
-                        
-                        <div className="flex items-start gap-2 text-stone-500 text-sm mt-4">
-                            <MapPin size={16} className="mt-0.5 flex-shrink-0" />
-                            <span>{w.location || 'Sin dirección registrada'}</span>
-                        </div>
+      {/* Grid de Tarjetas */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {loading ? (
+           <p className="text-slate-400 col-span-full text-center py-8">Cargando bodegas...</p>
+        ) : filteredWarehouses.length === 0 ? (
+           <p className="text-slate-400 col-span-full text-center py-8">No se encontraron bodegas.</p>
+        ) : (
+          filteredWarehouses.map((w) => (
+            <div key={w.id} className={`bg-white p-5 rounded-xl border transition-all hover:shadow-md group relative overflow-hidden flex flex-col ${!w.is_active ? 'opacity-70 grayscale border-slate-200' : 'border-slate-200'}`}>
+                
+                {/* Badge Estado */}
+                <div className={`absolute top-0 right-0 px-3 py-1 rounded-bl-xl text-[10px] font-bold uppercase tracking-wider ${w.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                    {w.is_active ? 'Activa' : 'Inactiva'}
+                </div>
 
-                        <button onClick={() => handleOpenEdit(w)} className="absolute top-4 right-4 text-stone-300 hover:text-blue-600 transition-colors" title="Editar / Gestionar">
+                {/* Encabezado Tarjeta */}
+                <div className="flex items-center gap-4 mb-4">
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center ${w.is_active ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400'}`}>
+                        <Warehouse size={24} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-slate-800 leading-tight">{w.name}</h3>
+                        <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xs font-mono bg-slate-100 px-1.5 rounded text-slate-500">{w.code}</span>
+                            {w.commune && <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 rounded border border-orange-100 font-bold uppercase">{w.commune}</span>}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Detalles */}
+                <div className="space-y-2 text-sm text-slate-600 mb-4 flex-1">
+                    <div className="flex items-start gap-2">
+                        <MapPin size={16} className="text-slate-400 mt-0.5 shrink-0"/>
+                        <span className="break-words leading-tight">{w.address || 'Sin dirección'}</span>
+                    </div>
+                    {w.georef && (
+                         <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded w-fit" title="Georreferenciación">
+                            <Map size={14} className="shrink-0"/>
+                            <span className="font-mono truncate max-w-[200px]">{w.georef}</span>
+                         </div>
+                    )}
+                    <div className="flex items-center gap-2 pt-1 border-t border-slate-50 mt-2">
+                        <User size={16} className="text-slate-400"/>
+                        <span className="truncate text-slate-500">{w.manager || 'Sin encargado'}</span>
+                    </div>
+                </div>
+
+                {/* Botonera de Acciones */}
+                <div className="pt-3 border-t border-slate-100 flex gap-2 justify-between items-center">
+                    {/* Botón COPIAR (El nuevo) */}
+                    <button 
+                        onClick={() => handleCopyInfo(w)}
+                        className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition-colors border border-slate-200 hover:border-blue-200"
+                        title="Copiar datos para compartir"
+                    >
+                        <Copy size={14} /> Copiar Datos
+                    </button>
+
+                    <div className="flex gap-1">
+                        <button onClick={() => handleOpenModal(w)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar">
                             <Edit size={18} />
                         </button>
-                    </div>
-                ))}
-            </div>
-        )}
-
-        {/* --- VISTA LISTA --- */}
-        {viewMode === 'list' && (
-            <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
-                <table className="w-full text-left">
-                    <thead className="bg-stone-50 text-xs uppercase font-bold text-stone-500 border-b">
-                        <tr>
-                            <th className="p-4">Estado</th>
-                            <th className="p-4">Código</th>
-                            <th className="p-4">Nombre</th>
-                            <th className="p-4">Tipo</th>
-                            <th className="p-4">Ubicación</th>
-                            <th className="p-4 text-right">Acción</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-stone-100 text-sm">
-                        {filteredWarehouses.map(w => (
-                            <tr key={w.id} className={`hover:bg-stone-50 ${!w.is_active ? 'bg-stone-50 text-stone-400' : ''}`}>
-                                <td className="p-4">
-                                    {w.is_active 
-                                        ? <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs"><CheckCircle size={14}/> Operativa</span>
-                                        : <span className="flex items-center gap-1 text-red-500 font-bold text-xs"><XCircle size={14}/> Cerrada</span>
-                                    }
-                                </td>
-                                <td className="p-4 font-mono">{w.code || '-'}</td>
-                                <td className="p-4 font-bold">{w.name}</td>
-                                <td className="p-4"><span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase border ${getTypeBadge(w.type)}`}>{w.type}</span></td>
-                                <td className="p-4 text-stone-500">{w.location}</td>
-                                <td className="p-4 text-right"><button onClick={() => handleOpenEdit(w)} className="text-stone-400 hover:text-blue-600"><Edit size={16} /></button></td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        )}
-
-        {/* MODAL DE EDICIÓN/CREACIÓN */}
-        {showModal && (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in">
-                    <div className="p-5 border-b bg-stone-50 flex justify-between items-center">
-                        <h3 className="font-bold text-lg text-stone-800">{editingWarehouse ? 'Gestión de Bodega' : 'Nueva Ubicación'}</h3>
-                        <button onClick={() => setShowModal(false)} className="text-stone-400 hover:text-red-500 font-bold text-xl">×</button>
-                    </div>
-                    <form onSubmit={handleSave} className="p-6 space-y-4">
-                        <div className="grid grid-cols-3 gap-4">
-                            <div className="col-span-2">
-                                <label className="block text-xs font-bold text-stone-500 mb-1 uppercase">Nombre</label>
-                                <input required className="w-full border p-2 rounded-lg" placeholder="Bodega Central" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-stone-500 mb-1 uppercase">Código</label>
-                                <input className="w-full border p-2 rounded-lg font-mono uppercase" placeholder="CEN-01" value={formData.code} onChange={e => setFormData({...formData, code: e.target.value})} />
-                            </div>
-                        </div>
-                        
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs font-bold text-stone-500 mb-1 uppercase">Tipo</label>
-                                <select className="w-full border p-2 rounded-lg bg-white" value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})}>
-                                    <option value="CENTRAL">Bodega Central</option>
-                                    <option value="OBRA">Obra / Proyecto</option>
-                                    <option value="MOVIL">Móvil (Vehículo)</option>
-                                </select>
-                            </div>
-                            <div className="flex items-end">
-                                <label className="flex items-center gap-2 cursor-pointer bg-stone-100 p-2 rounded-lg w-full border border-stone-200 hover:bg-stone-200 transition-colors">
-                                    <input type="checkbox" checked={formData.is_active} onChange={e => setFormData({...formData, is_active: e.target.checked})} className="w-4 h-4 text-emerald-600 rounded" />
-                                    <span className={`text-sm font-bold ${formData.is_active ? 'text-emerald-700' : 'text-stone-500'}`}>
-                                        {formData.is_active ? 'OPERATIVA' : 'INACTIVA'}
-                                    </span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="block text-xs font-bold text-stone-500 mb-1 uppercase">Dirección / Ubicación</label>
-                            <input className="w-full border p-2 rounded-lg" placeholder="Av. Industrial 550..." value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} />
-                        </div>
-                        
-                        <div>
-                            <label className="block text-xs font-bold text-stone-500 mb-1 uppercase">Descripción (Opcional)</label>
-                            <textarea className="w-full border p-2 rounded-lg text-sm" rows="2" placeholder="Notas adicionales..." value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} />
-                        </div>
-
-                        <button className="w-full bg-stone-900 text-white py-3 rounded-lg font-bold hover:bg-black shadow-lg transition-all active:scale-95">
-                            {editingWarehouse ? 'Guardar Cambios' : 'Crear Bodega'}
+                        <button onClick={() => handleToggleStatus(w.id, w.is_active)} className={`p-2 rounded-lg transition-colors ${w.is_active ? 'text-slate-400 hover:text-red-600 hover:bg-red-50' : 'text-emerald-600 hover:bg-emerald-50'}`} title={w.is_active ? "Desactivar" : "Reactivar"}>
+                            <Power size={18} />
                         </button>
-                    </form>
+                    </div>
                 </div>
             </div>
+          ))
         )}
-
       </div>
+
+      {/* Modal Formulario */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
+                <div className="p-5 border-b border-slate-100 flex justify-between items-center sticky top-0 bg-white z-10">
+                    <h3 className="font-bold text-lg text-slate-800">{editingId ? 'Editar Bodega' : 'Nueva Bodega'}</h3>
+                    <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+                </div>
+                
+                <form onSubmit={handleSave} className="p-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="col-span-2">
+                            <label className="block text-xs font-bold text-slate-500 mb-1">Nombre de Fantasía</label>
+                            <input required type="text" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="Ej: Obra Parque Central" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1">Código (Único)</label>
+                            <input required type="text" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono uppercase" value={formData.code} onChange={(e) => setFormData({...formData, code: e.target.value.toUpperCase()})} placeholder="BOD-XYZ" disabled={!!editingId} />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1">Comuna</label>
+                            <input type="text" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={formData.commune} onChange={(e) => setFormData({...formData, commune: e.target.value})} placeholder="Ej: San Miguel" />
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">Dirección Referencial</label>
+                        <input type="text" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={formData.address} onChange={(e) => setFormData({...formData, address: e.target.value})} placeholder="Calle o referencia..." />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1 flex items-center gap-2">
+                            <Map size={14} className="text-blue-500"/> Georreferenciación (Lat, Lng)
+                        </label>
+                        <input type="text" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm" value={formData.georef} onChange={(e) => setFormData({...formData, georef: e.target.value})} placeholder="-33.4372, -70.6506" />
+                        <p className="text-[10px] text-slate-400 mt-1">Copia y pega las coordenadas desde Google Maps.</p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">Encargado Responsable</label>
+                        <input type="text" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" value={formData.manager} onChange={(e) => setFormData({...formData, manager: e.target.value})} placeholder="Nombre completo" />
+                    </div>
+
+                    <div className="pt-4 flex gap-3">
+                        <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50">Cancelar</button>
+                        <button type="submit" className="flex-1 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex justify-center gap-2 items-center font-medium shadow-sm"><Save size={18} /> Guardar</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+      )}
     </div>
   );
-};
-
-export default WarehouseSettings;
+}
