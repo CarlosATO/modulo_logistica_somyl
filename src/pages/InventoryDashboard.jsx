@@ -13,9 +13,11 @@ export default function InventoryDashboard() {
 
   // Función para volver al Portal Central
   const handleBackToPortal = () => {
-    // Redirección absoluta fuera de la app
-    // CAMBIA ESTA URL SI TU PORTAL ESTÁ EN OTRO PUERTO O DOMINIO
-    window.location.href = 'http://localhost:5173'; 
+    // Redirección absoluta fuera de la app usando variable de entorno
+    // En desarrollo: http://localhost:5173
+    // En producción: https://portalsomyl-production.up.railway.app
+    const portalUrl = import.meta.env.VITE_PORTAL_URL || 'http://localhost:5173';
+    window.location.href = portalUrl; 
   };
 
   // Configuración de los botones
