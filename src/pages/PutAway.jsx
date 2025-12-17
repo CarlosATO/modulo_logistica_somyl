@@ -6,6 +6,7 @@ import {
   ArrowRight, Package, Warehouse, ArrowLeft, Grid, 
   MapPin, Move, CheckCircle, Loader, AlertCircle, RefreshCw 
 } from 'lucide-react';
+import { toast } from 'sonner'; // Reemplazar alert por toasts
 
 const PutAway = () => {
   const { user } = useAuth();
@@ -139,9 +140,15 @@ const PutAway = () => {
 
   // Guardar ubicación (Put Away)
   const handleMove = async () => {
-      if(!selectedItem || !targetLocation) return alert("Faltan datos.");
+      if(!selectedItem || !targetLocation) {
+          toast.error("⚠️ Faltan datos.");
+          return;
+      }
       const qty = Number(moveQty);
-      if(qty <= 0 || qty > selectedItem.pending_stock) return alert("Cantidad inválida.");
+      if(qty <= 0 || qty > selectedItem.pending_stock) {
+          toast.error("⚠️ Cantidad inválida.");
+          return;
+      }
 
       try {
           const locObj = locations.find(l => l.id === targetLocation);
@@ -181,12 +188,12 @@ const PutAway = () => {
               user_email: user?.email
           });
 
-          alert(`✅ Guardado en ${fullCode}`);
+          toast.success(`✅ Guardado en ${fullCode}`);
           fetchData(); 
 
       } catch (error) { 
           console.error(error);
-          alert("Error al guardar: " + error.message); 
+          toast.error("Error al guardar: " + error.message); 
       }
   };
 

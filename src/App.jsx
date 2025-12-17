@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { Routes, Route, Navigate, Outlet, useNavigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
 // --- COMPONENTES VISUALES ---
@@ -75,6 +76,7 @@ const GestionLayout = () => {
 export default function App() {
   return (
     <AuthProvider>
+      <Toaster position="top-center" richColors expand={true} />
       <SSOHandler /> {/* Captura el token antes de renderizar rutas */}
       <Routes>
         

@@ -3,6 +3,7 @@ import {
   Search, Filter, Camera, Image as ImageIcon, Loader, LayoutGrid, 
   List as ListIcon, X, Plus, Edit, Trash2, Save, Building
 } from 'lucide-react';
+import GoogleSearchBar from '../components/GoogleSearchBar';
 import { supabaseProcurement } from '../services/procurementClient';
 import { supabase } from '../services/supabaseClient';
 
@@ -195,24 +196,33 @@ export default function ProductList() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col xl:flex-row gap-4 justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-        <div><h2 className="text-xl font-bold text-slate-800">Maestro de Materiales</h2><p className="text-xs text-slate-500">Unificado: Compras + Asignados</p></div>
-        <div className="flex flex-col md:flex-row gap-3 w-full xl:w-auto">
-          <div className="relative flex-1 md:w-64">
-            <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
-            <input type="text" placeholder="Buscar material..." className="w-full pl-10 pr-4 py-2 border rounded-lg" onChange={(e) => setSearchTerm(e.target.value)}/>
+          {/* --- BUSCADOR MODERNO --- */}
+      <div className="mb-8">
+          <GoogleSearchBar 
+              placeholder="¿Qué material buscas? (Ej: Disco, Guantes, 3045...)" 
+              onSearch={(val) => setSearchTerm(val)} // <--- Conecta directo con tu estado existente
+          />
+      </div>
+
+      {/* Header con Filtros (Simplificado) */}
+      <div className="flex flex-col xl:flex-row gap-4 justify-between items-center mb-6">
+          <div>
+              <h2 className="text-xl font-bold text-slate-800">Maestro de Materiales</h2>
+              <p className="text-xs text-slate-500">Unificado: Compras + Asignados</p>
           </div>
-          <select className="px-3 py-2 border rounded-lg bg-slate-50 text-slate-700 text-sm" onChange={(e) => setFilterType(e.target.value)}>
-            <option value="ALL">Todo el Catálogo</option>
-            <option value="COMPRA">Solo Compras</option>
-            <option value="ASIGNADO">Solo Asignados</option>
-          </select>
-          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 shrink-0">
-            <button onClick={() => setViewMode('list')} className={`p-1.5 rounded-md ${viewMode === 'list' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}><ListIcon size={18}/></button>
-            <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-md ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}><LayoutGrid size={18}/></button>
+          <div className="flex gap-3">
+               {/* ... (Mantén tus selectores de filtros y botones de vista aquí) ... */}
+               <select className="px-3 py-2 border rounded-lg bg-slate-50 text-slate-700 text-sm" onChange={(e) => setFilterType(e.target.value)}>
+                  <option value="ALL">Todo el Catálogo</option>
+                  <option value="COMPRA">Solo Compras</option>
+                  <option value="ASIGNADO">Solo Asignados</option>
+                </select>
+                <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 shrink-0">
+                  <button onClick={() => setViewMode('list')} className={`p-1.5 rounded-md ${viewMode === 'list' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}><ListIcon size={18}/></button>
+                  <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-md ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}><LayoutGrid size={18}/></button>
+                </div>
+                <button onClick={() => handleOpenModal()} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm shadow-sm shrink-0"><Plus size={18} /> Asignado</button>
           </div>
-          <button onClick={() => handleOpenModal()} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium text-sm shadow-sm shrink-0"><Plus size={18} /> Asignado</button>
-        </div>
       </div>
 
       {/* Contenido (Tabla/Grid) - Simplificado para el ejemplo, es igual al anterior */}

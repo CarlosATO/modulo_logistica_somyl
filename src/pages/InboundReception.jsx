@@ -3,6 +3,8 @@ import {
   Search, Truck, UploadCloud, Plus, Trash2, CheckCircle, 
   Loader, Building, Calendar, Paperclip 
 } from 'lucide-react';
+import GoogleSearchBar from '../components/GoogleSearchBar'; // <--- Nuevo import
+import { toast } from 'sonner'; // <--- NUEVO IMPORT
 import { supabase } from '../services/supabaseClient';           
 import { supabaseProcurement } from '../services/procurementClient'; 
 import { useAuth } from '../context/AuthContext';
@@ -127,8 +129,11 @@ export default function InboundReception() {
   // ==========================================
   // 3. LÓGICA OC (CORREGIDA: PRECIO UNITARIO)
   // ==========================================
-  const handleSearchOC = async () => {
-    if (!ocNumber) return;
+  const handleSearchOC = async (term) => {
+    // Evitamos búsquedas con números muy cortos para no generar falsos positivos
+    if (!term || String(term).trim().length < 3) return;
+
+    setOcNumber(term);
     setLoading(true);
     setOcData(null);
     setOcHeader(null);
@@ -139,10 +144,10 @@ export default function InboundReception() {
       const { data: ocLines, error } = await supabaseProcurement
         .from('orden_de_compra')
         .select('*')
-        .eq('orden_compra', parseInt(ocNumber)); 
+        .eq('orden_compra', parseInt(term)); 
 
       if (error || !ocLines?.length) {
-        alert("Orden de Compra no encontrada.");
+        toast.error("Orden de Compra no encontrada.");
         return;
       }
 
@@ -159,7 +164,7 @@ export default function InboundReception() {
       const { data: history } = await supabase
         .from('movements')
         .select('oc_line_id, quantity')
-        .eq('oc_number', String(ocNumber))
+        .eq('oc_number', String(term))
         .eq('type', 'INBOUND');
 
       const receivedMap = {};
@@ -170,15 +175,13 @@ export default function InboundReception() {
 
       // CORRECCIÓN PRECIOS: Prioridad al precio de la OC (precio_unitario)
       const initialInputs = {};
-      
+
       ocLines.forEach(line => {
-        // Buscamos precio en OC, si no existe (raro), buscamos en historial de productos, si no 0.
-        // Nota: line.precio_unitario es la columna clave que mencionaste.
         const officialPrice = line.precio_unitario || line.precio || 0; 
 
         initialInputs[line.art_corr] = {
             quantity: '', 
-            price: officialPrice // <--- AQUÍ ESTÁ LA CORRECCIÓN
+            price: officialPrice
         };
       });
       
@@ -187,16 +190,23 @@ export default function InboundReception() {
 
     } catch (err) {
       console.error(err);
-      alert("Error buscando OC.");
+      toast.error("Error buscando OC.");
     } finally {
       setLoading(false);
     }
   };
 
   const handleSubmitOC = async () => {
-    if (!selectedWarehouse) return alert("Selecciona una bodega.");
+    // 1. VALIDACIÓN SIN ALERTAS MOLESTAS
+    if (!selectedWarehouse) {
+        toast.error("⚠️ Debes seleccionar una Bodega de Destino");
+        return;
+    }
     const mainDoc = ocInputs['global_doc'];
-    if (!mainDoc) return alert("Falta N° Guía / Factura.");
+    if (!mainDoc) {
+        toast.error("⚠️ Falta el N° de Guía o Factura");
+        return;
+    }
 
     const itemsToReceive = [];
     for (const line of ocData) {
@@ -207,70 +217,85 @@ export default function InboundReception() {
       const pending = line.cantidad - received;
 
       if (qty > 0) {
-        if (qty > pending) return alert(`Error: Excedes el pendiente en item ${line.codigo}`);
+        if (qty > pending) {
+            toast.error(`Error: Excedes el pendiente en item ${line.codigo}`);
+            return;
+        }
         itemsToReceive.push({ lineData: line, receiveQty: qty, unitPrice: price });
       }
     }
 
-    if (itemsToReceive.length === 0) return alert("Ingresa cantidades.");
+    if (itemsToReceive.length === 0) {
+        toast.warning("No hay cantidades ingresadas para recibir");
+        return;
+    }
 
     setProcessing(true);
-    try {
-        let docUrl = null;
-        if (receiptFile) {
-            const fileName = `OC-${ocNumber}-${Date.now()}.${receiptFile.name.split('.').pop()}`;
-            await supabase.storage.from('documents').upload(fileName, receiptFile);
-            docUrl = fileName;
-        }
 
-        for (const item of itemsToReceive) {
-            // Upsert Producto
-            let productId = null;
-            const { data: existingProd } = await supabase.from('products').select('id, current_stock').eq('code', item.lineData.codigo).maybeSingle();
-
-            if (existingProd) {
-                productId = existingProd.id;
-                await supabase.from('products').update({
-                    price: item.unitPrice, 
-                    current_stock: Number(existingProd.current_stock) + Number(item.receiveQty)
-                }).eq('id', productId);
-            } else {
-                const { data: newProd } = await supabase.from('products').insert({
-                    code: item.lineData.codigo,
-                    name: item.lineData.descripcion,
-                    unit: item.lineData.unidad || 'UN',
-                    price: item.unitPrice,
-                    current_stock: item.receiveQty
-                }).select().single();
-                productId = newProd.id;
+    const promise = new Promise(async (resolve, reject) => {
+        try {
+            let docUrl = null;
+            if (receiptFile) {
+                const fileName = `OC-${ocNumber}-${Date.now()}.${receiptFile.name.split('.').pop()}`;
+                await supabase.storage.from('documents').upload(fileName, receiptFile);
+                docUrl = fileName;
             }
 
-            // Movimiento
-            await supabase.from('movements').insert({
-                type: 'INBOUND',
-                warehouse_id: selectedWarehouse,
-                product_id: productId,
-                quantity: item.receiveQty,
-                unit_price: item.unitPrice,
-                oc_number: String(ocNumber),
-                oc_line_id: item.lineData.art_corr,
-                document_number: mainDoc,
-                reception_document_url: docUrl,
-                other_data: `OC: ${ocNumber} | ${item.lineData.descripcion}`,
-                comments: ocInputs['global_obs'] || `Recepción OC ${ocNumber}`,
-                user_email: user?.email
-            });
-        }
+            for (const item of itemsToReceive) {
+                // Upsert Producto
+                let productId = null;
+                const { data: existingProd } = await supabase.from('products').select('id, current_stock').eq('code', item.lineData.codigo).maybeSingle();
 
-        alert("✅ Recepción Guardada.");
-        handleSearchOC(); 
-        setOcInputs(p => ({ ...p, global_doc: '', global_obs: '' }));
-        setReceiptFile(null);
-    } catch (err) {
-        alert("Error: " + err.message);
-    } finally {
-        setProcessing(false);
-    }
+                if (existingProd) {
+                    productId = existingProd.id;
+                    await supabase.from('products').update({
+                        price: item.unitPrice, 
+                        current_stock: Number(existingProd.current_stock) + Number(item.receiveQty)
+                    }).eq('id', productId);
+                } else {
+                    const { data: newProd } = await supabase.from('products').insert({
+                        code: item.lineData.codigo,
+                        name: item.lineData.descripcion,
+                        unit: item.lineData.unidad || 'UN',
+                        price: item.unitPrice,
+                        current_stock: item.receiveQty
+                    }).select().single();
+                    productId = newProd.id;
+                }
+
+                // Movimiento
+                await supabase.from('movements').insert({
+                    type: 'INBOUND',
+                    warehouse_id: selectedWarehouse,
+                    product_id: productId,
+                    quantity: item.receiveQty,
+                    unit_price: item.unitPrice,
+                    oc_number: String(ocNumber),
+                    oc_line_id: item.lineData.art_corr,
+                    document_number: mainDoc,
+                    reception_document_url: docUrl,
+                    other_data: `OC: ${ocNumber} | ${item.lineData.descripcion}`,
+                    comments: ocInputs['global_obs'] || `Recepción OC ${ocNumber}`,
+                    user_email: user?.email
+                });
+            }
+
+            handleSearchOC(); 
+            setOcInputs(p => ({ ...p, global_doc: '', global_obs: '' }));
+            setReceiptFile(null);
+            resolve("Recepción registrada correctamente");
+
+        } catch (err) {
+            console.error(err);
+            reject("Error al guardar: " + (err.message || err));
+        }
+    });
+
+    toast.promise(promise, {
+        loading: 'Guardando recepción...',
+        success: (data) => `✅ ${data}`,
+        error: (err) => `❌ ${err}`,
+    }).finally(() => setProcessing(false));
   };
 
   // ==========================================
@@ -278,7 +303,8 @@ export default function InboundReception() {
   // ==========================================
   const addManualItem = () => {
     if (!selectedMaterialId || !newItem.quantity || !newItem.price) {
-        return alert('Faltan datos (Selección, Cantidad o Precio).');
+        toast.error('Faltan datos (Selección, Cantidad o Precio).');
+        return;
     }
     setManualCart([...manualCart, { ...newItem }]);
     setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
@@ -290,11 +316,26 @@ export default function InboundReception() {
   };
 
   const handleSubmitAssigned = async () => {
-    if (!selectedWarehouse) return alert("Selecciona bodega.");
-    if (!assignedForm.client_name) return alert("Selecciona Cliente.");
-    if (!assignedForm.project_name) return alert("Selecciona Proyecto.");
-    if (!assignedForm.document_number) return alert("Falta N° Guía.");
-    if (manualCart.length === 0) return alert("Carrito vacío.");
+    if (!selectedWarehouse) {
+        toast.error("Selecciona bodega.");
+        return;
+    }
+    if (!assignedForm.client_name) {
+        toast.error("Selecciona Cliente.");
+        return;
+    }
+    if (!assignedForm.project_name) {
+        toast.error("Selecciona Proyecto.");
+        return;
+    }
+    if (!assignedForm.document_number) {
+        toast.error("Falta N° Guía.");
+        return;
+    }
+    if (manualCart.length === 0) {
+        toast.error("Carrito vacío.");
+        return;
+    }
 
     setProcessing(true);
     try {
@@ -341,14 +382,14 @@ export default function InboundReception() {
             });
         }
 
-        alert("✅ Ingreso Asignado Guardado.");
+        toast.success("✅ Ingreso Asignado Guardado.");
         setManualCart([]);
         setAssignedForm({ client_name: '', project_name: '', document_number: '', supplier_name: '' });
         setReceiptFile(null);
         setSelectedMaterialId('');
     } catch (err) {
         console.error(err);
-        alert("Error: " + err.message);
+        toast.error("Error: " + err.message);
     } finally {
         setProcessing(false);
     }
@@ -391,17 +432,18 @@ export default function InboundReception() {
         {/* --- PESTAÑA OC --- */}
         {activeTab === 'OC' && (
             <div className="space-y-6 animate-in fade-in">
-                <div className="bg-blue-50 border border-blue-100 p-6 rounded-xl flex gap-4 items-end">
-                    <div className="flex-1">
-                        <label className="text-xs font-bold text-blue-800 uppercase mb-1">N° Orden de Compra</label>
-                        <div className="flex items-center bg-white border border-blue-200 rounded-lg px-3 py-2">
-                            <Search size={18} className="text-blue-300 mr-2"/>
-                            <input type="number" placeholder="Ej: 4500..." className="w-full outline-none font-mono text-blue-900 font-bold" value={ocNumber} onChange={e => setOcNumber(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearchOC()}/>
-                        </div>
+                        <div className="bg-blue-50 border border-blue-100 p-8 rounded-xl">
+                    <div className="text-center mb-4">
+                        <h3 className="text-blue-900 font-bold text-lg">Recepción por Orden de Compra</h3>
+                        <p className="text-blue-600/70 text-sm">Ingresa el número y el sistema buscará automáticamente</p>
                     </div>
-                    <button onClick={handleSearchOC} disabled={loading} className="bg-blue-600 text-white px-6 py-2.5 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-50">
-                        {loading ? <Loader className="animate-spin"/> : 'Buscar OC'}
-                    </button>
+                    
+                    <GoogleSearchBar 
+                        type="number"
+                        placeholder="Ej: 4500123" 
+                        loading={loading}
+                        onSearch={(val) => handleSearchOC(val)} 
+                    />
                 </div>
 
                 {ocData && (
@@ -445,7 +487,16 @@ export default function InboundReception() {
                         </div>
 
                         <div className="flex justify-end pt-4 border-t border-slate-200">
-                            <button onClick={handleSubmitOC} disabled={processing} className="bg-blue-600 text-white px-8 py-3 rounded-lg font-bold shadow-lg disabled:opacity-50">{processing ? <Loader className="animate-spin"/> : 'Confirmar'}</button>
+                            <button 
+                                onClick={handleSubmitOC} 
+                                disabled={processing || !selectedWarehouse || !ocInputs['global_doc']} 
+                                className={`px-8 py-3 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2
+                                    ${(processing || !selectedWarehouse || !ocInputs['global_doc']) 
+                                        ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
+                                        : 'bg-blue-600 text-white hover:bg-blue-700 hover:scale-105'
+                                    }`}>
+                                {processing ? <Loader className="animate-spin"/> : <><CheckCircle size={20}/> Confirmar Recepción</>}
+                            </button>
                         </div>
                     </div>
                 )}

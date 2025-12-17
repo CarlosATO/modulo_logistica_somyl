@@ -6,6 +6,8 @@ import {
   Search, ArrowRight, Truck, User, FileText, 
   MapPin, Package, X, CheckCircle, Loader, Briefcase, Plus, AlertCircle 
 } from 'lucide-react';
+import GoogleSearchBar from '../components/GoogleSearchBar';
+import { toast } from 'sonner'; // replace alert with toast notifications
 import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 
 // --- ESTILOS PDF ---
@@ -62,7 +64,7 @@ export default function OutboundDispatch() {
   const [receiver, setReceiver] = useState({ name: '', rut: '', plate: '', stage: '' }); // stage = Etapa/Lugar
 
   // Picking
-  const [searchQuery, setSearchQuery] = useState('');
+  // search handled via GoogleSearchBar debounce; results stored in searchResults
   const [searchResults, setSearchResults] = useState([]);
   const [cart, setCart] = useState([]);
   
@@ -103,27 +105,31 @@ export default function OutboundDispatch() {
   }, [selectedProject, projects]);
 
   // 2. Buscar Producto (Con Filtro de Cliente)
-  const handleSearch = async () => {
-    if (!searchQuery || !selectedWarehouse) return alert("Selecciona bodega y escribe algo.");
-    
-    // Buscar en tabla maestra
+  // Ahora acepta un término 'term' (pasa desde GoogleSearchBar con debounce)
+  const handleSearch = async (term) => {
+    // Si está vacío, limpiamos resultados silenciosamente
+    if (!term || term.trim().length === 0) {
+        setSearchResults([]);
+        return;
+    }
+
+    if (!selectedWarehouse) {
+        toast.error("⚠️ Primero selecciona una bodega.");
+        return;
+    }
+
+    // Buscar en tabla maestra usando 'term'
     const { data } = await supabase
         .from('products')
         .select('*')
-        .ilike('name', `%${searchQuery}%`)
+        .ilike('name', `%${term}%`)
         .gt('current_stock', 0)
         .limit(15);
     
     // FILTRADO INTELIGENTE:
-    // Mostrar solo si:
-    // A) El producto es GENÉRICO (No está en assigned_materials)
-    // B) O si el producto es ASIGNADO al Cliente del Proyecto seleccionado
     const filtered = (data || []).filter(prod => {
         const assignedInfo = assignedMaterials.find(a => a.code === prod.code);
-        
-        if (!assignedInfo) return true; // Es genérico/compra -> Mostrar siempre
-        
-        // Es asignado -> Validar dueño
+        if (!assignedInfo) return true;
         return assignedInfo.client_name === projectClient;
     });
     
@@ -181,76 +187,94 @@ export default function OutboundDispatch() {
           }
       });
 
-      if (totalPicked === 0) return alert("Ingresa una cantidad válida.");
+      if (totalPicked === 0) {
+          toast.error("⚠️ Ingresa una cantidad válida.");
+          return;
+      }
       
       setCart([...cart, ...newCartItems]);
       setShowPickModal(false);
-      setSearchQuery('');
       setSearchResults([]);
   };
 
-  // 5. Procesar Despacho
+  // 5. Procesar Despacho (VERSIÓN MEJORADA)
   const handleDispatch = async () => {
-      if (!selectedWarehouse || !selectedProject || !receiver.name) return alert("Faltan datos obligatorios.");
-      if (cart.length === 0) return alert("Carrito vacío.");
+      // Validaciones visuales con mensajes claros
+      if (!selectedWarehouse) return toast.error("⚠️ Selecciona la Bodega de Origen.");
+      if (!selectedProject) return toast.error("⚠️ Selecciona el Proyecto de Destino.");
+      if (!receiver.name) return toast.error("⚠️ Falta el nombre del Receptor.");
+      if (cart.length === 0) return toast.warning("⚠️ El carrito está vacío, agrega productos.");
 
       setIsProcessing(true);
-      try {
-          const folio = `SAL-${Date.now().toString().slice(-6)}`;
 
-          for (const item of cart) {
-              // Movimiento
-              await supabase.from('movements').insert({
-                  type: 'OUTBOUND',
-                  warehouse_id: selectedWarehouse,
-                  product_id: item.productId,
-                  quantity: item.quantity,
-                  project_id: selectedProject,
-                  document_number: folio,
-                  comments: `Despacho a ${receiver.name} (${receiver.stage})`,
-                  other_data: `Origen: ${item.locationName} | Dest: ${receiver.stage}`,
-                  user_email: user?.email
-              });
+      // Promesa para feedback visual
+      const promise = new Promise(async (resolve, reject) => {
+          try {
+              const folio = `SAL-${Date.now().toString().slice(-6)}`;
 
-              // Descuento Global
-              const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.productId).single();
-              if (prod) {
-                  await supabase.from('products').update({ current_stock: prod.current_stock - item.quantity }).eq('id', item.productId);
-              }
+              for (const item of cart) {
+                  // A. Registrar Movimiento
+                  const { error: movError } = await supabase.from('movements').insert({
+                      type: 'OUTBOUND',
+                      warehouse_id: selectedWarehouse,
+                      product_id: item.productId,
+                      quantity: item.quantity,
+                      project_id: selectedProject,
+                      document_number: folio,
+                      comments: `Despacho a ${receiver.name} (${receiver.stage})`,
+                      other_data: `Origen: ${item.locationName} | Dest: ${receiver.stage}`,
+                      user_email: user?.email
+                  });
+                  if (movError) throw movError;
 
-              // Descuento Rack
-              if (item.isRack) {
-                  const { data: rackItem } = await supabase.from('product_locations').select('quantity').eq('id', item.sourceId).single();
-                  if (rackItem) {
-                      const newQty = rackItem.quantity - item.quantity;
-                      if (newQty <= 0) await supabase.from('product_locations').delete().eq('id', item.sourceId);
-                      else await supabase.from('product_locations').update({ quantity: newQty }).eq('id', item.sourceId);
+                  // B. Descuento Global (Tabla products)
+                  const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.productId).single();
+                  if (prod) {
+                      await supabase.from('products').update({ current_stock: prod.current_stock - item.quantity }).eq('id', item.productId);
+                  }
+
+                  // C. Descuento Específico (Tabla product_locations - Racks)
+                  if (item.isRack) {
+                      const { data: rackItem } = await supabase.from('product_locations').select('quantity').eq('id', item.sourceId).single();
+                      if (rackItem) {
+                          const newQty = rackItem.quantity - item.quantity;
+                          if (newQty <= 0) await supabase.from('product_locations').delete().eq('id', item.sourceId);
+                          else await supabase.from('product_locations').update({ quantity: newQty }).eq('id', item.sourceId);
+                      }
                   }
               }
+
+              // Preparar datos para el PDF
+              const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
+              const prj = projects.find(p => p.id === Number(selectedProject));
+              
+              setLastDispatchData({
+                  id: folio, folio, warehouseName: whName,
+                  projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
+                  stage: receiver.stage,
+                  receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
+                  items: cart
+              });
+
+              // Limpiar formulario
+              setCart([]);
+              setReceiver({ name: '', rut: '', plate: '', stage: '' });
+              resolve(`Salida ${folio} registrada exitosamente`);
+
+          } catch (err) {
+              console.error(err);
+              reject(err.message || "Error al procesar el despacho");
           }
+      });
 
-          // Datos PDF
-          const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
-          const prj = projects.find(p => p.id === Number(selectedProject));
-          
-          setLastDispatchData({
-              id: folio, folio, warehouseName: whName,
-              projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
-              stage: receiver.stage,
-              receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
-              items: cart
-          });
-
-          setCart([]);
-          setReceiver({ name: '', rut: '', plate: '', stage: '' });
-          alert("✅ Despacho realizado.");
-
-      } catch (err) {
-          console.error(err);
-          alert("Error en despacho.");
-      } finally {
-          setIsProcessing(false);
-      }
+      // Ejecutar la notificación inteligente
+      toast.promise(promise, {
+          loading: 'Procesando salida de inventario...',
+          success: (msg) => `✅ ${msg}`,
+          error: (msg) => `❌ ${msg}`,
+      });
+      
+      setIsProcessing(false);
   };
 
   return (
@@ -290,15 +314,21 @@ export default function OutboundDispatch() {
       {selectedWarehouse && selectedProject && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border h-fit">
-                <div className="flex gap-2 mb-4">
-                    <input className="flex-1 border p-2 rounded" placeholder="Buscar material..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()}/>
-                    <button onClick={handleSearch} className="bg-blue-600 text-white p-2 rounded"><Search size={20}/></button>
-                </div>
+                <div className="mb-6">
+                <GoogleSearchBar 
+                    placeholder="Buscar producto para despachar..." 
+                    onSearch={(val) => handleSearch(val)} 
+                />
+            </div>
                 <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {searchResults.length === 0 && <p className="text-center text-slate-400 py-4 text-sm">Escribe para buscar...</p>}
                     {searchResults.map(prod => (
-                        <div key={prod.id} onClick={()=>openPickModal(prod)} className="p-3 border rounded cursor-pointer hover:bg-blue-50 transition-colors flex justify-between items-center">
-                            <div><div className="font-bold text-sm text-slate-700">{prod.name}</div><div className="text-xs text-slate-500">{prod.code}</div></div>
-                            <span className="bg-slate-100 text-xs px-2 py-1 rounded font-bold">{prod.current_stock}</span>
+                        <div key={prod.id} onClick={()=>openPickModal(prod)} className="p-3 border rounded cursor-pointer hover:bg-blue-50 transition-colors flex justify-between items-center group">
+                            <div>
+                                <div className="font-bold text-sm text-slate-700 group-hover:text-blue-700">{prod.name}</div>
+                                <div className="text-xs text-slate-500">{prod.code}</div>
+                            </div>
+                            <span className="bg-slate-100 group-hover:bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded font-bold">{prod.current_stock}</span>
                         </div>
                     ))}
                 </div>
@@ -323,7 +353,16 @@ export default function OutboundDispatch() {
                 </div>
                 <div className="flex justify-end gap-3">
                     {lastDispatchData && <PDFDownloadLink document={<DispatchDocument data={lastDispatchData}/>} fileName="Despacho.pdf"><button className="text-blue-600 px-4 py-2 font-bold bg-white border rounded">Descargar PDF</button></PDFDownloadLink>}
-                    <button onClick={handleDispatch} disabled={isProcessing||cart.length===0} className="bg-orange-600 text-white px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2">{isProcessing?<Loader className="animate-spin"/>:'Confirmar Salida'}</button>
+                    <button 
+                        onClick={handleDispatch} 
+                        disabled={isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name} 
+                        className={`px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all
+                            ${(isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name)
+                                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                                : 'bg-orange-600 text-white hover:bg-orange-700 hover:scale-105'
+                            }`}>
+                        {isProcessing ? <Loader className="animate-spin"/> : 'Confirmar Salida'}
+                    </button>
                 </div>
             </div>
         </div>
