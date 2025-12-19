@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { supabaseProcurement } from '../services/procurementClient';
 import { 
     Search, FileText, Calendar, ExternalLink, 
     Edit3, Filter, Loader, AlertCircle, CheckCircle2, Clock, Trash2
@@ -16,13 +17,41 @@ export default function DirectInboundList() {
     const fetchReceptions = async () => {
         setLoading(true);
         try {
-            const { data, error } = await supabase
+            // Obtener recepciones
+            const { data: receptionsData, error: receptionsError } = await supabase
                 .from('v_direct_receptions_summary')
                 .select('*')
                 .order('date', { ascending: false });
             
-            if (error) throw error;
-            setReceptions(data || []);
+            if (receptionsError) throw receptionsError;
+
+            // Obtener nombres de bodegas
+            const { data: warehousesData } = await supabase
+                .from('warehouses')
+                .select('id, name');
+
+            // Crear mapa de bodegas
+            const warehousesMap = {};
+            (warehousesData || []).forEach(wh => {
+                warehousesMap[wh.id] = wh.name;
+            });
+
+            // Enriquecer datos con nombres de bodegas y proyectos
+            const enrichedData = (receptionsData || []).map(item => {
+                // Extraer proyecto desde comments: "Ingreso Asignado | NOMBRE_PROYECTO"
+                let projectName = 'Sin Proyecto';
+                if (item.comments && item.comments.includes('|')) {
+                    projectName = item.comments.split('|')[1]?.trim() || 'Sin Proyecto';
+                }
+                
+                return {
+                    ...item,
+                    warehouse_name: warehousesMap[item.warehouse_id] || 'N/A',
+                    project_name: projectName
+                };
+            });
+            
+            setReceptions(enrichedData);
         } catch (error) {
             toast.error("Error al cargar historial");
         } finally {
@@ -122,8 +151,25 @@ export default function DirectInboundList() {
                                         )}
                                     </td>
                                     <td className="px-6 py-4 text-right">
-                                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <Edit3 size={18} className="text-blue-400 ml-auto" />
+                                        <div className="flex items-center justify-end gap-2">
+                                            {/* Botón Eliminar - Solo visible para PENDING_STORAGE */}
+                                            {rec.status === 'PENDING_STORAGE' && (
+                                                <button 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation(); // Evitar que se dispare el doble clic
+                                                        handleDelete(rec.document_number);
+                                                    }}
+                                                    className="p-2 hover:bg-red-50 text-red-500 rounded-lg transition-all border border-transparent hover:border-red-200"
+                                                    title="Eliminar Ingreso"
+                                                >
+                                                    <Trash2 size={18}/>
+                                                </button>
+                                            )}
+                                            
+                                            {/* Ícono Edit3 que aparece en hover */}
+                                            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <Edit3 size={18} className="text-blue-400" />
+                                            </div>
                                         </div>
                                     </td>
                                 </tr>
