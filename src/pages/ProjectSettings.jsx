@@ -4,6 +4,7 @@ import {
   Copy, CheckCircle, XCircle, Info, Loader
 } from 'lucide-react';
 import { supabaseProcurement } from '../services/procurementClient';
+import Combobox from '../components/Combobox';
 
 export default function ProjectSettings() {
   const [projects, setProjects] = useState([]);
@@ -103,15 +104,16 @@ export default function ProjectSettings() {
 
         <div className="flex gap-3 w-full md:w-auto">
           {/* Filtro de Estado */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
-          >
-            <option value="ACTIVO">Activos</option>
-            <option value="Inactivo">Inactivos</option>
-            <option value="TODOS">Todos</option>
-          </select>
+          <Combobox
+            options={[
+              { id: 'ACTIVO', name: 'Activos' },
+              { id: 'Inactivo', name: 'Inactivos' },
+              { id: 'TODOS', name: 'Todos' }
+            ]}
+            selected={statusFilter}
+            onChange={setStatusFilter}
+            placeholder="Estado"
+          />
 
           {/* Buscador */}
           <div className="w-full md:w-80 relative">

@@ -3,6 +3,7 @@ import { supabase } from '../services/supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { Warehouse, MapPin, Plus, Trash2, ArrowLeft, Grid, QrCode, Printer, X, Save } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import Combobox from '../components/Combobox';
 
 export default function LocationSettings() {
   const navigate = useNavigate();
@@ -146,13 +147,12 @@ export default function LocationSettings() {
         {/* Selector de Bodega */}
         <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
             <Warehouse size={16} className="text-slate-400"/>
-            <select 
-                className="bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer min-w-[150px]"
-                value={selectedWarehouse}
-                onChange={e => setSelectedWarehouse(e.target.value)}
-            >
-                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
+            <Combobox
+                options={warehouses}
+                selected={selectedWarehouse}
+                onChange={setSelectedWarehouse}
+                placeholder="Seleccionar Bodega"
+            />
         </div>
       </div>
 

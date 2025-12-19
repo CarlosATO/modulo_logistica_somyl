@@ -4,6 +4,7 @@ import {
   List as ListIcon, X, Plus, Edit, Trash2, Save, Building
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
+import Combobox from '../components/Combobox';
 import { supabaseProcurement } from '../services/procurementClient';
 import { supabase } from '../services/supabaseClient';
 
@@ -212,11 +213,16 @@ export default function ProductList() {
           </div>
           <div className="flex gap-3">
                {/* ... (Mantén tus selectores de filtros y botones de vista aquí) ... */}
-               <select className="px-3 py-2 border rounded-lg bg-slate-50 text-slate-700 text-sm" onChange={(e) => setFilterType(e.target.value)}>
-                  <option value="ALL">Todo el Catálogo</option>
-                  <option value="COMPRA">Solo Compras</option>
-                  <option value="ASIGNADO">Solo Asignados</option>
-                </select>
+               <Combobox
+                  options={[
+                    { id: 'ALL', name: 'Todo el Catálogo' },
+                    { id: 'COMPRA', name: 'Solo Compras' },
+                    { id: 'ASIGNADO', name: 'Solo Asignados' }
+                  ]}
+                  selected={filterType}
+                  onChange={setFilterType}
+                  placeholder="Tipo de material"
+               />
                 <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 shrink-0">
                   <button onClick={() => setViewMode('list')} className={`p-1.5 rounded-md ${viewMode === 'list' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}><ListIcon size={18}/></button>
                   <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-md ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}><LayoutGrid size={18}/></button>
@@ -267,10 +273,12 @@ export default function ProductList() {
                 <form onSubmit={handleSaveAssigned} className="p-6 space-y-4">
                     <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1">Cliente (Fuente: Proyectos)</label>
-                        <select required className="w-full border rounded-lg px-3 py-2 bg-slate-50" value={formData.client_name} onChange={e=>setFormData({...formData, client_name: e.target.value})}>
-                            <option value="">-- Seleccionar --</option>
-                            {clientsList.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
+                        <Combobox
+                            options={clientsList.map(c => ({ id: c, name: c }))}
+                            selected={formData.client_name}
+                            onChange={(id) => setFormData({...formData, client_name: id})}
+                            placeholder="-- Seleccionar --"
+                        />
                     </div>
                     {/* ... Resto de inputs iguales ... */}
                     <input required className="w-full border rounded px-3 py-2 font-mono" placeholder="Código" value={formData.code} onChange={e=>setFormData({...formData, code: e.target.value})}/>

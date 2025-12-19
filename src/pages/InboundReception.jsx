@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Search, Truck, UploadCloud, Plus, Trash2, CheckCircle, 
-  Loader, Building, Calendar, Paperclip 
+    Search, Truck, UploadCloud, Plus, Trash2, CheckCircle, 
+    Loader, Building, Calendar, Paperclip, FileText, Package, AlertCircle, Hash, Save, ShoppingCart, AlertTriangle
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar'; // <--- Nuevo import
+import Combobox from '../components/Combobox';
 import { toast } from 'sonner'; // <--- NUEVO IMPORT
 import { supabase } from '../services/supabaseClient';           
 import { supabaseProcurement } from '../services/procurementClient'; 
@@ -46,6 +47,14 @@ export default function InboundReception() {
   });
   const [receiptFile, setReceiptFile] = useState(null);
 
+    // --- ESTADOS INGRESO DIRECTO ---
+    const [products, setProducts] = useState([]);
+    const [selectedProject, setSelectedProject] = useState('');
+    const [directReceiptCart, setDirectReceiptCart] = useState([]);
+    const [directInputs, setDirectInputs] = useState({ documentNumber: '', comments: '' });
+    const [selectedProductForDirect, setSelectedProductForDirect] = useState('');
+    const [directLineQuantity, setDirectLineQuantity] = useState('');
+
   // ==========================================
   // 1. CARGA INICIAL DE MAESTROS
   // ==========================================
@@ -73,6 +82,10 @@ export default function InboundReception() {
             .order('nombre', { ascending: true });
         
         setSuppliersDB(supp || []);
+
+                // Cargar productos para Combobox Directo
+                const { data: prods } = await supabase.from('products').select('*');
+                setProducts(prods || []);
 
       } catch (error) {
         console.error("Error cargando maestros:", error);
@@ -102,8 +115,7 @@ export default function InboundReception() {
     loadCatalog();
   }, [assignedForm.client_name]);
 
-  const handleMaterialSelect = (e) => {
-      const matId = e.target.value;
+  const handleMaterialSelect = (matId) => {
       setSelectedMaterialId(matId);
 
       const material = clientCatalog.find(m => m.id === matId);
@@ -197,7 +209,6 @@ export default function InboundReception() {
   };
 
   const handleSubmitOC = async () => {
-    // 1. VALIDACIÓN SIN ALERTAS MOLESTAS
     if (!selectedWarehouse) {
         toast.error("⚠️ Debes seleccionar una Bodega de Destino");
         return;
@@ -208,25 +219,20 @@ export default function InboundReception() {
         return;
     }
 
-    const itemsToReceive = [];
-    for (const line of ocData) {
-      const input = ocInputs[line.art_corr] || {};
-      const qty = Number(input.quantity || 0);
-      const price = Number(input.price || 0);
-      const received = ocHistory[line.art_corr] || 0;
-      const pending = line.cantidad - received;
+    // Preparamos los items para el RPC
+    const itemsToProcess = ocData
+        .filter(line => Number(ocInputs[line.art_corr]?.quantity || 0) > 0)
+        .map(line => ({
+            codigo: line.codigo,
+            descripcion: line.descripcion,
+            unidad: line.unidad || 'UN',
+            cantidad: Number(ocInputs[line.art_corr].quantity),
+            precio: Number(ocInputs[line.art_corr].price || 0),
+            art_corr: String(line.art_corr)
+        }));
 
-      if (qty > 0) {
-        if (qty > pending) {
-            toast.error(`Error: Excedes el pendiente en item ${line.codigo}`);
-            return;
-        }
-        itemsToReceive.push({ lineData: line, receiveQty: qty, unitPrice: price });
-      }
-    }
-
-    if (itemsToReceive.length === 0) {
-        toast.warning("No hay cantidades ingresadas para recibir");
+    if (itemsToProcess.length === 0) {
+        toast.warning("No hay cantidades ingresadas");
         return;
     }
 
@@ -237,62 +243,37 @@ export default function InboundReception() {
             let docUrl = null;
             if (receiptFile) {
                 const fileName = `OC-${ocNumber}-${Date.now()}.${receiptFile.name.split('.').pop()}`;
-                await supabase.storage.from('documents').upload(fileName, receiptFile);
+                const { error: uploadError } = await supabase.storage.from('documents').upload(fileName, receiptFile);
+                if (uploadError) throw uploadError;
                 docUrl = fileName;
             }
 
-            for (const item of itemsToReceive) {
-                // Upsert Producto
-                let productId = null;
-                const { data: existingProd } = await supabase.from('products').select('id, current_stock').eq('code', item.lineData.codigo).maybeSingle();
+            // LLAMADA ATÓMICA AL RPC
+            const { error: rpcError } = await supabase.rpc('receive_oc_items', {
+                p_warehouse_id: selectedWarehouse,
+                p_oc_number: String(ocNumber),
+                p_document_number: mainDoc,
+                p_doc_url: docUrl,
+                p_global_obs: ocInputs['global_obs'] || null,
+                p_user_email: user?.email,
+                p_items: itemsToProcess
+            });
 
-                if (existingProd) {
-                    productId = existingProd.id;
-                    await supabase.from('products').update({
-                        price: item.unitPrice, 
-                        current_stock: Number(existingProd.current_stock) + Number(item.receiveQty)
-                    }).eq('id', productId);
-                } else {
-                    const { data: newProd } = await supabase.from('products').insert({
-                        code: item.lineData.codigo,
-                        name: item.lineData.descripcion,
-                        unit: item.lineData.unidad || 'UN',
-                        price: item.unitPrice,
-                        current_stock: item.receiveQty
-                    }).select().single();
-                    productId = newProd.id;
-                }
+            if (rpcError) throw rpcError;
 
-                // Movimiento
-                await supabase.from('movements').insert({
-                    type: 'INBOUND',
-                    warehouse_id: selectedWarehouse,
-                    product_id: productId,
-                    quantity: item.receiveQty,
-                    unit_price: item.unitPrice,
-                    oc_number: String(ocNumber),
-                    oc_line_id: item.lineData.art_corr,
-                    document_number: mainDoc,
-                    reception_document_url: docUrl,
-                    other_data: `OC: ${ocNumber} | ${item.lineData.descripcion}`,
-                    comments: ocInputs['global_obs'] || `Recepción OC ${ocNumber}`,
-                    user_email: user?.email
-                });
-            }
-
-            handleSearchOC(); 
+            handleSearchOC(ocNumber); // Refrescar vista
             setOcInputs(p => ({ ...p, global_doc: '', global_obs: '' }));
             setReceiptFile(null);
-            resolve("Recepción registrada correctamente");
+            resolve("Recepción procesada correctamente en servidor");
 
         } catch (err) {
             console.error(err);
-            reject("Error al guardar: " + (err.message || err));
+            reject("Error: " + (err.message || "Fallo en la transacción"));
         }
     });
 
     toast.promise(promise, {
-        loading: 'Guardando recepción...',
+        loading: 'Ejecutando transacción segura...',
         success: (data) => `✅ ${data}`,
         error: (err) => `❌ ${err}`,
     }).finally(() => setProcessing(false));
@@ -395,6 +376,110 @@ export default function InboundReception() {
     }
   };
 
+  // ===== Helpers para INGRESO DIRECTO =====
+  const handleFileChange = (e) => {
+      const f = e?.target?.files?.[0];
+      if (f) setReceiptFile(f);
+  };
+
+  const handleAddToDirectCart = () => {
+      if (!selectedProductForDirect || !directLineQuantity || Number(directLineQuantity) <= 0) {
+          toast.error('Faltan datos para agregar la línea.');
+          return;
+      }
+      const prod = products.find(p => p.id === selectedProductForDirect);
+      if (!prod) {
+          toast.error('Producto no válido');
+          return;
+      }
+      setDirectReceiptCart(prev => [...prev, { product: prod, quantity: Number(directLineQuantity) }]);
+      setSelectedProductForDirect('');
+      setDirectLineQuantity('');
+  };
+
+  const handleRemoveFromDirectCart = (idx) => {
+      setDirectReceiptCart(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSubmitDirect = async () => {
+      // 1. Validaciones finales de seguridad
+      if (directReceiptCart.length === 0) return toast.warning("⚠️ El carrito está vacío.");
+      if (!selectedWarehouse) return toast.error("⚠️ Error crítico: Bodega no seleccionada.");
+      if (!selectedProject) return toast.error("⚠️ Error crítico: Origen no seleccionado.");
+
+      // 2. REGLA: Advertencia de Archivo Faltante
+      if (!receiptFile) {
+          const confirmNoFile = window.confirm(
+              "⚠️ ADVERTENCIA:\n\nEstás a punto de guardar un ingreso SIN un documento de respaldo adjunto (guía/factura).\n\n¿Estás seguro de que deseas continuar?"
+          );
+          if (!confirmNoFile) return;
+      }
+
+      // Si pasa las validaciones, procedemos...
+      setProcessing(true);
+
+      // Usamos toast.promise para feedback visual del proceso largo
+      toast.promise(
+          new Promise(async (resolve, reject) => {
+              try {
+                  // A. Subir archivo si existe
+                  let docUrl = null;
+                  if (receiptFile) {
+                      const fileName = `DIRECT-${directInputs.documentNumber}-${Date.now()}.${receiptFile.name.split('.').pop()}`;
+                      const { error: uploadError } = await supabase.storage
+                          .from('documents')
+                          .upload(fileName, receiptFile);
+                      if (uploadError) throw uploadError;
+                      docUrl = fileName;
+                  }
+
+                  // B. Preparar el payload para el RPC
+                  const itemsToProcess = directReceiptCart.map(item => ({
+                      codigo: item.product.code,
+                      descripcion: item.product.name,
+                      unidad: item.product.unit || 'UN',
+                      cantidad: Number(item.quantity),
+                      precio: 0,
+                      art_corr: 'DIRECT'
+                  }));
+
+                  // C. Obtener nombre del proyecto/cliente para observaciones
+                  const projectData = projectsDB.find(p => p.id === Number(selectedProject));
+                  const originName = projectData ? `${projectData.proyecto} (${projectData.cliente})` : 'Origen Desconocido';
+
+                  // D. LLAMADA ATÓMICA AL RPC
+                  const { error: rpcError } = await supabase.rpc('receive_oc_items', {
+                      p_warehouse_id: selectedWarehouse,
+                      p_oc_number: 'DIRECTO',
+                      p_document_number: directInputs.documentNumber,
+                      p_doc_url: docUrl,
+                      p_global_obs: `Ingreso Directo desde: ${originName}. ${directInputs.comments || ''}`,
+                      p_user_email: user?.email,
+                      p_items: itemsToProcess
+                  });
+
+                  if (rpcError) throw rpcError;
+
+                  // E. Limpieza post-éxito
+                  setDirectReceiptCart([]);
+                  setDirectInputs({ documentNumber: '', comments: '' });
+                  setReceiptFile(null);
+
+                  resolve(`Ingreso ${directInputs.documentNumber} registrado correctamente.`);
+
+              } catch (err) {
+                  console.error(err);
+                  reject(err.message || "Error al procesar el ingreso.");
+              }
+          }),
+          {
+              loading: 'Guardando ingreso directo...',
+              success: (msg) => `✅ ${msg}`,
+              error: (msg) => `❌ ${msg}`
+          }
+      ).finally(() => setProcessing(false));
+  };
+
 
   return (
     <div className="pb-20 bg-slate-50 min-h-screen font-sans text-slate-800">
@@ -412,17 +497,18 @@ export default function InboundReception() {
         {/* SELECCIÓN BODEGA Y MODO */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Bodega de Destino</label>
-                    <select className="w-full border-2 border-slate-200 rounded-lg p-2 font-bold text-slate-700 outline-none bg-transparent" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
-                        <option value="">-- Seleccionar --</option>
-                        {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                    </select>
-                </div>
+                <Combobox
+                    options={warehouses}
+                    value={selectedWarehouse}
+                    onChange={setSelectedWarehouse}
+                    placeholder="-- Seleccionar Bodega --"
+                    label="Bodega de Destino"
+                />
                 <div>
                     <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Tipo de Ingreso</label>
                     <div className="flex bg-slate-100 p-1 rounded-lg">
                         <button onClick={() => setActiveTab('OC')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${activeTab === 'OC' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}>Orden de Compra</button>
+                        <button onClick={() => setActiveTab('direct')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${activeTab === 'direct' ? 'bg-white shadow text-green-600' : 'text-slate-400'}`}>Ingreso Directo</button>
                         <button onClick={() => setActiveTab('ASSIGNED')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${activeTab === 'ASSIGNED' ? 'bg-white shadow text-purple-600' : 'text-slate-400'}`}>Material Asignado</button>
                     </div>
                 </div>
@@ -500,6 +586,273 @@ export default function InboundReception() {
                         </div>
                     </div>
                 )}
+
+                {/* ================= TAB: INGRESO DIRECTO (RENOVADO) ================= */}
+                {activeTab === 'direct' && (
+                    <div className="space-y-6">
+                        
+                        {/* --- SECCIÓN 1: DATOS GENERALES (Cabecera) --- */}
+                        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                            <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                                <FileText className="w-5 h-5 text-blue-600" />
+                                1. Datos de Cabecera
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                
+                                {/* 1. Selección de Bodega (Mejora: Combobox + Bloqueo) */}
+                                <div>
+                                    <Combobox
+                                        options={warehouses}
+                                        value={selectedWarehouse}
+                                        onChange={(val) => {
+                                           if(directReceiptCart.length > 0 && val !== selectedWarehouse) {
+                                               if(confirm("⚠️ Si cambias la bodega, se perderán las líneas ingresadas. ¿Deseas continuar?")){
+                                                   setDirectReceiptCart([]);
+                                                   setSelectedWarehouse(val);
+                                               }
+                                           } else {
+                                               setSelectedWarehouse(val);
+                                           }
+                                        }}
+                                        placeholder="Busca y selecciona bodega..."
+                                        label="Bodega de Destino *"
+                                    />
+                                     {directReceiptCart.length > 0 && (
+                                        <p className="text-xs text-amber-600 mt-1">
+                                            🔒 Bodega bloqueada porque hay ítems en proceso.
+                                        </p>
+                                    )}
+                                </div>
+
+                                 {/* 2. Selección de Cliente/Proyecto (Mejora: Combobox) */}
+                                <div>
+                                     <Combobox
+                                        options={projectsDB.map(p => ({ id: p.id, name: `${p.proyecto} (${p.cliente})` }))}
+                                        value={selectedProject}
+                                        onChange={setSelectedProject}
+                                        placeholder="Busca cliente o proyecto..."
+                                        label="Cliente / Proyecto (Origen) *"
+                                    />
+                                </div>
+
+                                 {/* 3. N° Documento */}
+                                <div>
+                                     <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        N° Guía / Factura <span className="text-red-500">*</span>
+                                    </label>
+                                     <div className="relative">
+                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                            <Hash className="h-4 w-4 text-gray-400" />
+                                        </div>
+                                         <input
+                                            type="text"
+                                            value={directInputs.documentNumber}
+                                            onChange={e => setDirectInputs(prev => ({ ...prev, documentNumber: e.target.value }))}
+                                            className="pl-10 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                            placeholder="Ej: GD-123456"
+                                        />
+                                     </div>
+                                </div>
+                            </div>
+                             <div className="mt-4">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Observaciones Generales</label>
+                                <textarea
+                                    rows={2}
+                                    value={directInputs.comments}
+                                    onChange={e => setDirectInputs(prev => ({ ...prev, comments: e.target.value }))}
+                                    className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                    placeholder="Opcional: Comentarios sobre esta recepción..."
+                                />
+                            </div>
+                        </div>
+
+
+                        {/* --- SECCIÓN 2: INGRESO DE LÍNEAS (Detalle) --- */}
+                        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                                <Package className="w-5 h-5 text-blue-600" />
+                                2. Agregar Productos
+                            </h3>
+
+                            {/* REGLA: Validar pre-requisitos antes de mostrar el ingreso de líneas */}
+                            {(!selectedWarehouse || !selectedProject || !directInputs.documentNumber) ? (
+                                <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md flex items-start">
+                                    <AlertCircle className="h-5 w-5 text-yellow-400 mr-3 flex-shrink-0" />
+                                    <p className="text-sm text-yellow-700">
+                                        👋 Para comenzar a agregar productos, primero debes seleccionar la <strong>Bodega</strong>, el <strong>Cliente/Proyecto</strong> e ingresar el <strong>N° de Documento</strong> en la sección superior.
+                                    </p>
+                                </div>
+                            ) : (
+                                // Si los datos previos están listos, mostramos el formulario de línea
+                                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                     {/* A. Selección de Producto (Mejora: Combobox) */}
+                                    <div className="md:col-span-6">
+                                        <Combobox
+                                            options={products.map(p => ({ id: p.id, name: `${p.name} (${p.code})` }))}
+                                            value={selectedProductForDirect}
+                                            onChange={setSelectedProductForDirect}
+                                            placeholder="Escribe código o nombre..."
+                                            label="Buscar Material *"
+                                        />
+                                         {selectedProductForDirect && (
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                Código seleccionado: <span className="font-medium">{products.find(p => p.id === selectedProductForDirect)?.code}</span>
+                                            </p>
+                                        )}
+                                    </div>
+                                    
+                                    {/* B. Cantidad */}
+                                    <div className="md:col-span-3">
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad <span className="text-red-500">*</span></label>
+                                         <input
+                                            type="number"
+                                            min="0.01"
+                                            step="0.01"
+                                            value={directLineQuantity}
+                                            onChange={e => setDirectLineQuantity(e.target.value)}
+                                            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                            placeholder="0.00"
+                                        />
+                                    </div>
+
+                                     {/* C. Botón Agregar */}
+                                    <div className="md:col-span-3">
+                                         <button
+                                            onClick={handleAddToDirectCart}
+                                            disabled={!selectedProductForDirect || !directLineQuantity || Number(directLineQuantity) <= 0}
+                                            className="w-full flex justify-center items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                                        >
+                                            <Plus className="h-4 w-4 mr-2" />
+                                            Agregar Línea
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                             {/* --- TABLA RESUMEN DEL CARRITO --- */}
+                             <div className="mt-6">
+                                {directReceiptCart.length > 0 ? (
+                                    <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 md:rounded-lg">
+                                        <table className="min-w-full divide-y divide-gray-300">
+                                            <thead className="bg-gray-50">
+                                                <tr>
+                                                    <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">Código</th>
+                                                    <th scope="col" className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Descripción</th>
+                                                    <th scope="col" className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">Cant.</th>
+                                                    <th scope="col" className="relative py-3.5 pl-3 pr-4 sm:pr-6">
+                                                        <span className="sr-only">Acciones</span>
+                                                    </th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-200 bg-white">
+                                                {directReceiptCart.map((item, index) => (
+                                                    <tr key={index}>
+                                                        <td className="whitespace-nowrap py-2 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">{item.product.code}</td>
+                                                        <td className="whitespace-nowrap px-3 py-2 text-sm text-gray-500">{item.product.name}</td>
+                                                        <td className="whitespace-nowrap px-3 py-2 text-sm text-right text-gray-900 font-semibold bg-blue-50">{item.quantity}</td>
+                                                        <td className="relative whitespace-nowrap py-2 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+                                                            <button
+                                                                onClick={() => handleRemoveFromDirectCart(index)}
+                                                                className="text-red-600 hover:text-red-900 transition-colors"
+                                                                title="Eliminar línea"
+                                                            >
+                                                                <Trash2 className="h-4 w-4" />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                             <tfoot className="bg-gray-50">
+                                                <tr>
+                                                    <td colSpan={2} className="py-2 pl-4 pr-3 text-right text-sm font-semibold text-gray-900 sm:pl-6">Total Ítems:</td>
+                                                    <td className="px-3 py-2 text-right text-sm font-bold text-blue-700">
+                                                        {directReceiptCart.reduce((acc, item) => acc + Number(item.quantity), 0).toFixed(2)}
+                                                    </td>
+                                                    <td></td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <div className="text-center py-8 text-gray-500 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+                                        <ShoppingCart className="mx-auto h-10 w-10 text-gray-400 mb-2" />
+                                        <p>El carrito de ingreso está vacío.</p>
+                                        <p className="text-sm mt-1">Agrega productos en la sección superior.</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+
+                        {/* --- SECCIÓN 3: CIERRE Y ARCHIVOS (Pie) --- */}
+                        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                                <Save className="w-5 h-5 text-blue-600" />
+                                3. Finalizar Recepción
+                            </h3>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                                 {/* Carga de Archivo */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Adjuntar Respaldo Digital (PDF/IMG) <span className="text-gray-400 text-xs">(Opcional pero recomendado)</span>
+                                    </label>
+                                     <div className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-md transition-colors ${receiptFile ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}`}>
+                                        <div className="space-y-1 text-center items-center flex flex-col">
+                                            {receiptFile ? (
+                                                <>
+                                                <CheckCircle className="mx-auto h-10 w-10 text-green-500" />
+                                                <div className="flex text-sm text-gray-600">
+                                                    <span className="font-medium text-blue-600 truncate max-w-[200px]">{receiptFile.name}</span>
+                                                </div>
+                                                <button type="button" onClick={()=>setReceiptFile(null)} className="text-xs text-red-500 hover:text-red-700 font-medium">
+                                                    [ Eliminar archivo ]
+                                                </button>
+                                                </>
+                                            ) : (
+                                                <>
+                                                <UploadCloud className="mx-auto h-10 w-10 text-gray-400" />
+                                                <div className="flex text-sm text-gray-600">
+                                                    <label htmlFor="file-upload-direct" className="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500 focus-within:outline-none">
+                                                        <span>Subir un archivo</span>
+                                                        <input id="file-upload-direct" name="file-upload-direct" type="file" className="sr-only" onChange={handleFileChange} accept=".pdf,.jpg,.jpeg,.png" />
+                                                    </label>
+                                                    <p className="pl-1">o arrastrar y soltar</p>
+                                                </div>
+                                                <p className="text-xs text-gray-500">PDF, PNG, JPG hasta 5MB</p>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                    {/* REGLA: Advertencia visual si no hay archivo */}
+                                     {!receiptFile && directReceiptCart.length > 0 && (
+                                        <p className="text-xs text-amber-600 mt-2 flex items-center">
+                                            <AlertTriangle className="h-3 w-3 mr-1" />
+                                            Advertencia: Se grabará el ingreso sin documento de respaldo.
+                                        </p>
+                                    )}
+                                </div>
+
+                                 {/* Botón Final de Guardar */}
+                                <div className="flex flex-col justify-end h-full">
+                                     <button
+                                        onClick={handleSubmitDirect}
+                                        disabled={processing || directReceiptCart.length === 0}
+                                        className="w-full flex justify-center items-center px-6 py-4 border border-transparent rounded-md shadow-sm text-base font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-300 disabled:cursor-not-allowed transition-all"
+                                    >
+                                        {processing ? (
+                                            <Loader className="h-5 w-5 animate-spin mr-2" />
+                                        ) : (
+                                            <Save className="h-5 w-5 mr-2" />
+                                        )}
+                                        {processing ? 'Procesando Ingreso...' : `Confirmar Recepción (${directReceiptCart.length} ítems)`}
+                                    </button>
+                                     {directReceiptCart.length === 0 && !processing && (
+                                        <p className="text-sm text-gray-500 text-center mt-2">Agrega líneas al carrito para finalizar.</p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         )}
 
@@ -507,19 +860,40 @@ export default function InboundReception() {
         {activeTab === 'ASSIGNED' && (
             <div className="space-y-6 animate-in fade-in">
                 <div className="bg-white p-5 rounded-xl shadow-sm border border-purple-100 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div><label className="text-xs font-bold text-slate-400 block mb-1">Cliente</label><select className="w-full border p-2 rounded-lg bg-slate-50" value={assignedForm.client_name} onChange={e => {setAssignedForm({...assignedForm, client_name: e.target.value, project_name: ''}); setClientCatalog([]);}}><option value="">-- Seleccionar --</option>{clientsList.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-                    <div><label className="text-xs font-bold text-slate-400 block mb-1">Proyecto</label><select className={`w-full border p-2 rounded-lg ${!assignedForm.client_name ? 'bg-slate-100' : 'bg-slate-50'}`} value={assignedForm.project_name} onChange={e => setAssignedForm({...assignedForm, project_name: e.target.value})} disabled={!assignedForm.client_name}><option value="">{assignedForm.client_name ? '-- Seleccionar --' : '-- Primero Cliente --'}</option>{filteredProjects.map(p => <option key={p.id} value={p.proyecto}>{p.proyecto}</option>)}</select></div>
-                    <div><label className="text-xs font-bold text-slate-400 block mb-1">Proveedor</label><select className="w-full border p-2 rounded-lg bg-slate-50" value={assignedForm.supplier_name} onChange={e => setAssignedForm({...assignedForm, supplier_name: e.target.value})}><option value="">-- Seleccionar --</option>{suppliersDB.map(s => <option key={s.id} value={s.nombre}>{s.nombre}</option>)}</select></div>
+                    <Combobox
+                        options={clientsList.map(c => ({ id: c, name: c }))}
+                        value={assignedForm.client_name}
+                        onChange={(val) => {setAssignedForm({...assignedForm, client_name: val, project_name: ''}); setClientCatalog([]);}}
+                        placeholder="-- Seleccionar Cliente --"
+                        label="Cliente"
+                    />
+                    <Combobox
+                        options={filteredProjects.map(p => ({ id: p.proyecto, name: p.proyecto }))}
+                        value={assignedForm.project_name}
+                        onChange={(val) => setAssignedForm({...assignedForm, project_name: val})}
+                        placeholder={assignedForm.client_name ? '-- Seleccionar Proyecto --' : '-- Primero Cliente --'}
+                        label="Proyecto"
+                        disabled={!assignedForm.client_name}
+                    />
+                    <Combobox
+                        options={suppliersDB.map(s => ({ id: s.nombre, name: s.nombre }))}
+                        value={assignedForm.supplier_name}
+                        onChange={(val) => setAssignedForm({...assignedForm, supplier_name: val})}
+                        placeholder="-- Seleccionar Proveedor --"
+                        label="Proveedor"
+                    />
                     <div><label className="text-xs font-bold text-slate-400 block mb-1">N° Guía</label><input type="text" className="w-full border p-2 rounded-lg font-bold" value={assignedForm.document_number} onChange={e => setAssignedForm({...assignedForm, document_number: e.target.value})} /></div>
                 </div>
 
                 <div className="bg-purple-50 p-5 rounded-xl border border-purple-100 grid grid-cols-12 gap-3 mb-4">
                     <div className="col-span-4">
-                        <label className="text-[10px] font-bold text-purple-700 uppercase">Material ({assignedForm.client_name})</label>
-                        <select className="w-full p-2 rounded border border-purple-200 text-sm" value={selectedMaterialId} onChange={handleMaterialSelect}>
-                            <option value="">-- Seleccionar Material --</option>
-                            {clientCatalog.map(m => <option key={m.id} value={m.id}>{m.description} ({m.code})</option>)}
-                        </select>
+                        <Combobox
+                            options={clientCatalog.map(m => ({ id: m.id, name: `${m.description} (${m.code})` }))}
+                            value={selectedMaterialId}
+                            onChange={handleMaterialSelect}
+                            placeholder="-- Seleccionar Material --"
+                            label={`Material ${assignedForm.client_name ? '(' + assignedForm.client_name + ')' : ''}`}
+                        />
                     </div>
                     <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Código</label><input type="text" className="w-full p-2 rounded border border-purple-200 bg-white opacity-80" value={newItem.code} readOnly /></div>
                     <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Cant.</label><input type="number" className="w-full p-2 rounded border border-purple-200 font-bold text-center" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: e.target.value})} /></div>

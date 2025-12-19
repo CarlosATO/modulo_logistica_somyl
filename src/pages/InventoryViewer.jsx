@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
+import Combobox from '../components/Combobox';
 import { 
   Search, ArrowUpCircle, ArrowDownCircle, ArrowRightCircle, 
   Layers, History, Loader, MapPin, Download, Grid, DollarSign, Wallet
@@ -231,10 +232,12 @@ export default function InventoryViewer() {
                   <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
                   <input type="text" placeholder="Buscar producto..." className="w-full pl-10 pr-4 py-2 border rounded-lg outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
               </div>
-              <select className="border rounded-lg px-3 py-2 bg-slate-50" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
-                  <option value="ALL">Todas las Bodegas</option>
-                  {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>
+              <Combobox
+                  options={[{ id: 'ALL', name: 'Todas las Bodegas' }, ...warehouses]}
+                  value={selectedWarehouse}
+                  onChange={setSelectedWarehouse}
+                  placeholder="-- Filtrar Bodega --"
+              />
               <button onClick={handleExport} className="flex items-center justify-center gap-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-black transition-colors">
                   <Download size={18}/> Exportar Excel
               </button>

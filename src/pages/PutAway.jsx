@@ -36,97 +36,42 @@ const PutAway = () => {
       load();
   }, []);
 
-  // 2. Cargar Inventario
+  // 2. Cargar Inventario (OPTIMIZADO: usamos vista en BD)
   const fetchData = useCallback(async () => {
-      if(!selectedWarehouse) return;
-      
-      setLoadingItems(true);
-      setErrorMsg(null);
-      setStagingItems([]);
-      setSelectedItem(null);
-      setMoveQty('');
-      
-      try {
-          // A. Ubicaciones
-          const { data: locs } = await supabase.from('locations').select('*').eq('warehouse_id', selectedWarehouse).order('full_code');
-          setLocations(locs || []);
+    if(!selectedWarehouse) return;
+    
+    setLoadingItems(true);
+    setErrorMsg(null);
+    setStagingItems([]);
+    setSelectedItem(null);
+    setMoveQty('');
+    
+    try {
+        // A. Cargar Ubicaciones (se mantiene igual)
+        const { data: locs } = await supabase
+            .from('locations')
+            .select('*')
+            .eq('warehouse_id', selectedWarehouse)
+            .order('full_code');
+        setLocations(locs || []);
 
-          // B. Movimientos (Historial de todo lo que ha entrado/salido)
-          const { data: movements, error: movErr } = await supabase
-            .from('movements')
-            .select('*') // Traemos todo para evitar errores de columnas faltantes
+        // B. CONSULTA OPTIMIZADA A LA VISTA
+        // Ya no descargamos movimientos ni hacemos cálculos manuales
+        const { data: pendingItems, error: viewErr } = await supabase
+            .from('view_pending_putaway')
+            .select('*')
             .eq('warehouse_id', selectedWarehouse);
 
-          if (movErr) throw movErr;
+        if (viewErr) throw viewErr;
 
-          // C. Stock ya ubicado en Racks (Lo que ya ordenaste)
-          const { data: allocatedStock, error: allErr } = await supabase
-            .from('product_locations')
-            .select('product_id, quantity')
-            .eq('warehouse_id', selectedWarehouse);
-            
-          if (allErr) throw allErr;
+        setStagingItems(pendingItems || []);
 
-          // --- CÁLCULOS MATEMÁTICOS ---
-          
-          // 1. Calcular Stock Total Teórico en Bodega (Según Kárdex)
-          const stockInWarehouseMap = {};
-          
-          movements?.forEach(m => {
-              if (!m.product_id) return;
-              const qty = Number(m.quantity);
-              
-              if (!stockInWarehouseMap[m.product_id]) stockInWarehouseMap[m.product_id] = 0;
-              
-              // SUMAR: Compras (INBOUND) y Traspasos Recibidos (TRANSFER_IN)
-              if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') {
-                  stockInWarehouseMap[m.product_id] += qty;
-              }
-              
-              // RESTAR: Salidas (OUTBOUND) y Traspasos Enviados (TRANSFER_OUT)
-              if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') {
-                  stockInWarehouseMap[m.product_id] -= qty;
-              }
-          });
-
-          // 2. Calcular Stock ya guardado en Racks
-          const allocatedMap = {};
-          allocatedStock?.forEach(item => {
-              allocatedMap[item.product_id] = (allocatedMap[item.product_id] || 0) + Number(item.quantity);
-          });
-
-          // 3. Cruzar datos: (Lo que tengo en total) - (Lo que ya guardé) = (Lo que falta por guardar)
-          const productIds = Object.keys(stockInWarehouseMap);
-          
-          if (productIds.length > 0) {
-              const { data: products } = await supabase.from('products').select('*').in('id', productIds);
-              
-              const pendingItems = [];
-              products?.forEach(p => {
-                  const totalHere = stockInWarehouseMap[p.id] || 0;
-                  const inRacks = allocatedMap[p.id] || 0;
-                  const pending = totalHere - inRacks;
-
-                  // Solo mostramos si hay pendiente positivo (ej: llegaron 10, guardé 0 -> Muestro 10)
-                  if (pending > 0) {
-                      pendingItems.push({
-                          ...p,
-                          pending_stock: pending,
-                          total_stock: totalHere
-                      });
-                  }
-              });
-              setStagingItems(pendingItems);
-          } else {
-              setStagingItems([]);
-          }
-
-      } catch (error) {
-          console.error("Error cargando datos:", error);
-          setErrorMsg("Error al calcular stock.");
-      } finally {
-          setLoadingItems(false);
-      }
+    } catch (error) {
+        console.error("Error cargando datos optimizados:", error);
+        setErrorMsg("Error al cargar el stock pendiente.");
+    } finally {
+        setLoadingItems(false);
+    }
   }, [selectedWarehouse]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -222,9 +167,12 @@ const PutAway = () => {
             <div className="p-3 bg-stone-100 rounded-full"><Warehouse className="text-stone-500" /></div>
             <div className="flex-1">
                 <label className="block text-[10px] font-bold text-stone-400 uppercase">Bodega Operativa</label>
-                <select className="bg-transparent font-bold text-lg w-full outline-none cursor-pointer" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
-                    {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                </select>
+                <Combobox
+                    options={warehouses}
+                    selected={selectedWarehouse}
+                    onChange={setSelectedWarehouse}
+                    placeholder="-- Seleccionar Bodega --"
+                />
             </div>
         </div>
 
@@ -266,7 +214,7 @@ const PutAway = () => {
                         <div className="text-center mb-6"><div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3"><Move size={28}/></div><h3 className="text-lg font-black text-stone-800">Ubicar en Rack</h3></div>
                         <div className="space-y-5">
                             <div><label className="text-xs font-bold text-stone-500 uppercase">Cantidad a Guardar</label><div className="flex items-center gap-2"><input type="number" className="flex-1 border-2 border-blue-200 p-3 rounded-xl font-black text-2xl text-center text-blue-600 focus:border-blue-500 outline-none" value={moveQty} onChange={(e) => setMoveQty(e.target.value)} /><span className="text-xs font-bold text-stone-400">/ {selectedItem.pending_stock}</span></div></div>
-                            <div><label className="text-xs font-bold text-stone-500 uppercase flex gap-2 mb-2"><MapPin size={14}/> Destino Físico</label><select className="w-full border-2 border-stone-200 p-3 rounded-xl bg-white font-bold text-stone-700 outline-none" value={targetLocation} onChange={e => setTargetLocation(e.target.value)}><option value="">-- Seleccionar --</option>{locations.map(l => <option key={l.id} value={l.id}>{l.full_code} ({l.zone})</option>)}</select></div>
+                            <div><label className="text-xs font-bold text-stone-500 uppercase flex gap-2 mb-2"><MapPin size={14}/> Destino Físico</label><Combobox options={locations.map(l => ({ id: l.id, name: `${l.full_code} (${l.zone})` }))} selected={targetLocation} onChange={setTargetLocation} placeholder="-- Seleccionar --" /></div>
                             <button onClick={handleMove} disabled={!targetLocation || !moveQty} className="w-full bg-stone-900 text-white py-4 rounded-xl font-bold hover:bg-black shadow-lg flex justify-center gap-2"><CheckCircle size={20}/> Confirmar Ubicación</button>
                         </div>
                     </div>

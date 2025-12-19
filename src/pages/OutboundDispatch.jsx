@@ -7,6 +7,7 @@ import {
   MapPin, Package, X, CheckCircle, Loader, Briefcase, Plus, AlertCircle 
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
+import Combobox from '../components/Combobox';
 import { toast } from 'sonner'; // replace alert with toast notifications
 import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 
@@ -197,84 +198,73 @@ export default function OutboundDispatch() {
       setSearchResults([]);
   };
 
-  // 5. Procesar Despacho (VERSIÓN MEJORADA)
+  // 5. Procesar Despacho (VERSIÓN MEJORADA - RPC)
   const handleDispatch = async () => {
-      // Validaciones visuales con mensajes claros
-      if (!selectedWarehouse) return toast.error("⚠️ Selecciona la Bodega de Origen.");
-      if (!selectedProject) return toast.error("⚠️ Selecciona el Proyecto de Destino.");
-      if (!receiver.name) return toast.error("⚠️ Falta el nombre del Receptor.");
-      if (cart.length === 0) return toast.warning("⚠️ El carrito está vacío, agrega productos.");
+    if (!selectedWarehouse) return toast.error("⚠️ Selecciona la Bodega de Origen.");
+    if (!selectedProject) return toast.error("⚠️ Selecciona el Proyecto de Destino.");
+    if (!receiver.name) return toast.error("⚠️ Falta el nombre del Receptor.");
+    if (cart.length === 0) return toast.warning("⚠️ El carrito está vacío.");
 
-      setIsProcessing(true);
+    setIsProcessing(true);
 
-      // Promesa para feedback visual
-      const promise = new Promise(async (resolve, reject) => {
-          try {
-              const folio = `SAL-${Date.now().toString().slice(-6)}`;
+    const promise = new Promise(async (resolve, reject) => {
+        try {
+            const folio = `SAL-${Date.now().toString().slice(-6)}`;
 
-              for (const item of cart) {
-                  // A. Registrar Movimiento
-                  const { error: movError } = await supabase.from('movements').insert({
-                      type: 'OUTBOUND',
-                      warehouse_id: selectedWarehouse,
-                      product_id: item.productId,
-                      quantity: item.quantity,
-                      project_id: selectedProject,
-                      document_number: folio,
-                      comments: `Despacho a ${receiver.name} (${receiver.stage})`,
-                      other_data: `Origen: ${item.locationName} | Dest: ${receiver.stage}`,
-                      user_email: user?.email
-                  });
-                  if (movError) throw movError;
+            // Preparamos los items para el RPC
+            const itemsToProcess = cart.map(item => ({
+                productId: item.productId,
+                quantity: item.quantity,
+                isRack: item.isRack,
+                sourceId: String(item.sourceId),
+                name: item.name,
+                code: item.code,
+                locationName: item.locationName
+            }));
 
-                  // B. Descuento Global (Tabla products)
-                  const { data: prod } = await supabase.from('products').select('current_stock').eq('id', item.productId).single();
-                  if (prod) {
-                      await supabase.from('products').update({ current_stock: prod.current_stock - item.quantity }).eq('id', item.productId);
-                  }
+            // Llamada única al servidor (Atómica)
+            const { error: rpcError } = await supabase.rpc('dispatch_materials', {
+                p_warehouse_id: selectedWarehouse,
+                p_project_id: Number(selectedProject),
+                p_document_number: folio,
+                p_receiver_name: receiver.name,
+                p_receiver_rut: receiver.rut || '',
+                p_receiver_stage: receiver.stage || '',
+                p_user_email: user?.email,
+                p_items: itemsToProcess
+            });
 
-                  // C. Descuento Específico (Tabla product_locations - Racks)
-                  if (item.isRack) {
-                      const { data: rackItem } = await supabase.from('product_locations').select('quantity').eq('id', item.sourceId).single();
-                      if (rackItem) {
-                          const newQty = rackItem.quantity - item.quantity;
-                          if (newQty <= 0) await supabase.from('product_locations').delete().eq('id', item.sourceId);
-                          else await supabase.from('product_locations').update({ quantity: newQty }).eq('id', item.sourceId);
-                      }
-                  }
-              }
+            if (rpcError) throw rpcError;
 
-              // Preparar datos para el PDF
-              const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
-              const prj = projects.find(p => p.id === Number(selectedProject));
-              
-              setLastDispatchData({
-                  id: folio, folio, warehouseName: whName,
-                  projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
-                  stage: receiver.stage,
-                  receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
-                  items: cart
-              });
+            // Preparar datos para el PDF (se mantiene igual)
+            const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
+            const prj = projects.find(p => p.id === Number(selectedProject));
+            
+            setLastDispatchData({
+                id: folio, folio, warehouseName: whName,
+                projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
+                stage: receiver.stage,
+                receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
+                items: cart
+            });
 
-              // Limpiar formulario
-              setCart([]);
-              setReceiver({ name: '', rut: '', plate: '', stage: '' });
-              resolve(`Salida ${folio} registrada exitosamente`);
+            setCart([]);
+            setReceiver({ name: '', rut: '', plate: '', stage: '' });
+            resolve(`Salida ${folio} registrada exitosamente`);
 
-          } catch (err) {
-              console.error(err);
-              reject(err.message || "Error al procesar el despacho");
-          }
-      });
+        } catch (err) {
+            console.error(err);
+            reject(err.message || "Error al procesar el despacho");
+        }
+    });
 
-      // Ejecutar la notificación inteligente
-      toast.promise(promise, {
-          loading: 'Procesando salida de inventario...',
-          success: (msg) => `✅ ${msg}`,
-          error: (msg) => `❌ ${msg}`,
-      });
-      
-      setIsProcessing(false);
+    toast.promise(promise, {
+        loading: 'Procesando salida atómica...',
+        success: (msg) => `✅ ${msg}`,
+        error: (msg) => `❌ ${msg}`,
+    });
+    
+    setIsProcessing(false);
   };
 
   return (
@@ -282,19 +272,21 @@ export default function OutboundDispatch() {
       
       {/* Cabecera */}
       <div className="bg-white p-6 rounded-xl shadow-sm border grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Combobox
+              options={warehouses}
+              value={selectedWarehouse}
+              onChange={setSelectedWarehouse}
+              placeholder="-- Seleccionar Bodega --"
+              label="Bodega Origen"
+          />
           <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Bodega Origen</label>
-              <select className="w-full border rounded-lg px-3 py-2 bg-slate-50" value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value)}>
-                  <option value="">-- Seleccionar --</option>
-                  {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>
-          </div>
-          <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Proyecto Destino (Externo)</label>
-              <select className="w-full border rounded-lg px-3 py-2 bg-slate-50" value={selectedProject} onChange={e => setSelectedProject(e.target.value)}>
-                  <option value="">-- Seleccionar --</option>
-                  {projects.map(p => <option key={p.id} value={p.id}>{p.proyecto} ({p.cliente})</option>)}
-              </select>
+              <Combobox
+                  options={projects.map(p => ({ id: p.id, name: `${p.proyecto} (${p.cliente})` }))}
+                  value={selectedProject}
+                  onChange={setSelectedProject}
+                  placeholder="-- Seleccionar Proyecto --"
+                  label="Proyecto Destino (Externo)"
+              />
               {projectClient && <p className="text-xs text-blue-600 mt-1 font-bold">Cliente detectado: {projectClient}</p>}
           </div>
       </div>

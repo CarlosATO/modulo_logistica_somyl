@@ -3,6 +3,7 @@ import { supabase } from '../services/supabaseClient';
 import { supabaseProcurement } from '../services/procurementClient'; // <--- CONEXIÓN EXTERNA
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import Combobox from '../components/Combobox';
 import { 
   ArrowRightLeft, Building2, UserCheck, Search, Trash2, 
   Save, FileText, X, MapPin, Briefcase, Loader
@@ -239,15 +240,13 @@ export default function TransferMaterial() {
                 <div className="space-y-4">
                     {/* ORIGEN */}
                     <div className="p-3 bg-red-50 rounded-lg border border-red-100">
-                        <label className="text-[10px] font-bold text-red-500 uppercase block mb-1">Bodega de Origen (Sale)</label>
-                        <select 
-                            className="w-full bg-transparent font-bold outline-none text-slate-700 cursor-pointer" 
-                            value={formData.originWarehouse} 
-                            onChange={e => {setFormData({...formData, originWarehouse: e.target.value}); setCart([]);}}
-                        >
-                            <option value="">-- Seleccionar --</option>
-                            {availableOrigins.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                        </select>
+                        <Combobox
+                            options={availableOrigins}
+                            value={formData.originWarehouse}
+                            onChange={(val) => {setFormData({...formData, originWarehouse: val}); setCart([]);}}
+                            placeholder="-- Seleccionar Bodega Origen --"
+                            label="Bodega de Origen (Sale)"
+                        />
                     </div>
                     
                     <div className="flex justify-center -my-2 relative z-10">
@@ -256,15 +255,13 @@ export default function TransferMaterial() {
                     
                     {/* DESTINO */}
                     <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-                        <label className="text-[10px] font-bold text-emerald-600 uppercase block mb-1">Bodega de Destino (Entra)</label>
-                        <select 
-                            className="w-full bg-transparent font-bold outline-none text-slate-700 cursor-pointer" 
-                            value={formData.destinationWarehouse} 
-                            onChange={e => setFormData({...formData, destinationWarehouse: e.target.value})}
-                        >
-                            <option value="">-- Seleccionar --</option>
-                            {availableDestinations.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-                        </select>
+                        <Combobox
+                            options={availableDestinations}
+                            value={formData.destinationWarehouse}
+                            onChange={(val) => setFormData({...formData, destinationWarehouse: val})}
+                            placeholder="-- Seleccionar Bodega Destino --"
+                            label="Bodega de Destino (Entra)"
+                        />
                     </div>
                 </div>
             </div>
@@ -287,32 +284,24 @@ export default function TransferMaterial() {
                     
                     {/* SELECTOR PROYECTO ORIGEN */}
                     <div>
-                        <label className="text-xs font-bold text-slate-400 flex items-center gap-1 mb-1"><Briefcase size={12}/> Proyecto Origen</label>
-                        <select 
-                            className="w-full border p-2 rounded-lg outline-none bg-white text-sm" 
-                            value={formData.originProjectId} 
-                            onChange={e => setFormData({...formData, originProjectId: e.target.value})}
-                        >
-                            <option value="">-- Sin Proyecto Específico --</option>
-                            {projects.map(p => (
-                                <option key={p.id} value={p.id}>{p.name} ({p.client_name})</option>
-                            ))}
-                        </select>
+                        <Combobox
+                            options={[{ id: '', name: '-- Sin Proyecto Específico --' }, ...projects.map(p => ({ id: p.id, name: `${p.name} (${p.client_name})` }))]}
+                            value={formData.originProjectId}
+                            onChange={(val) => setFormData({...formData, originProjectId: val})}
+                            placeholder="-- Sin Proyecto --"
+                            label="Proyecto Origen"
+                        />
                     </div>
 
                     {/* SELECTOR PROYECTO DESTINO */}
                     <div>
-                        <label className="text-xs font-bold text-slate-400 flex items-center gap-1 mb-1"><Briefcase size={12}/> Proyecto Destino</label>
-                        <select 
-                            className="w-full border p-2 rounded-lg outline-none bg-white text-sm" 
-                            value={formData.destinationProjectId} 
-                            onChange={e => setFormData({...formData, destinationProjectId: e.target.value})}
-                        >
-                            <option value="">-- Sin Proyecto Específico --</option>
-                            {projects.map(p => (
-                                <option key={p.id} value={p.id}>{p.name} ({p.client_name})</option>
-                            ))}
-                        </select>
+                        <Combobox
+                            options={[{ id: '', name: '-- Sin Proyecto Específico --' }, ...projects.map(p => ({ id: p.id, name: `${p.name} (${p.client_name})` }))]}
+                            value={formData.destinationProjectId}
+                            onChange={(val) => setFormData({...formData, destinationProjectId: val})}
+                            placeholder="-- Sin Proyecto --"
+                            label="Proyecto Destino"
+                        />
                     </div>
                 </div>
             </div>
