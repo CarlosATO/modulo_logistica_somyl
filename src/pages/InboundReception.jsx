@@ -585,6 +585,8 @@ export default function InboundReception() {
                         </div>
                     </div>
                 )}
+            </div>
+        )}
 
         {/* --- PESTAÑA ASIGNADO --- */}
         {activeTab === 'ASSIGNED' && (
