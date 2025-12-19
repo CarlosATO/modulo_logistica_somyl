@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Package, ArrowDownCircle, ArrowUpCircle, ClipboardList, 
   Settings, Truck, Warehouse, Box, Grid, Layers, ArrowRightLeft,
+  FileText, History,
   FileBarChart, ArrowLeft // <--- Agregamos la flecha
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -28,6 +29,20 @@ export default function InventoryDashboard() {
       path: "/gestion/ingreso", 
       icon: <ArrowDownCircle size={32} />, 
       color: "bg-emerald-50 text-emerald-600 border-emerald-100" 
+    },
+    { 
+      title: "Lista de ingresos",
+      desc: "Historial de ingresos directos",
+      path: "/gestion/historial-ingresos",
+      icon: <FileText size={32} />,
+      color: "bg-emerald-50 text-emerald-600 border-emerald-100"
+    },
+    { 
+      title: "Historial de Ingresos", 
+      desc: "Consultar y editar recepciones", 
+      path: "/gestion/historial-ingresos", 
+      icon: <History size={32} />, 
+      color: "bg-blue-50 text-blue-700 border-blue-200" 
     },
     { 
       title: "Registro de Salida", 

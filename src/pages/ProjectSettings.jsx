@@ -28,9 +28,8 @@ export default function ProjectSettings() {
       if (error) throw error;
       setProjects(data);
       
-      // Debug: mostrar valores únicos de estado_proyecto
+      // Extraer valores únicos de estado_proyecto
       const uniqueStatuses = [...new Set(data.map(p => p.estado_proyecto).filter(Boolean))];
-      console.log('Estados de proyecto encontrados:', uniqueStatuses);
     } catch (error) {
       console.error('Error cargando proyectos:', error);
     } finally {

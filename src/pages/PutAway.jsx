@@ -6,7 +6,8 @@ import {
   ArrowRight, Package, Warehouse, ArrowLeft, Grid, 
   MapPin, Move, CheckCircle, Loader, AlertCircle, RefreshCw 
 } from 'lucide-react';
-import { toast } from 'sonner'; // Reemplazar alert por toasts
+import { toast } from 'sonner';
+import Combobox from '../components/Combobox';
 
 const PutAway = () => {
   const { user } = useAuth();
@@ -36,7 +37,7 @@ const PutAway = () => {
       load();
   }, []);
 
-  // 2. Cargar Inventario (OPTIMIZADO: usamos vista en BD)
+  // 2. Cargar Inventario (OPTIMIZADO: Consultas paralelas y campos específicos)
   const fetchData = useCallback(async () => {
     if(!selectedWarehouse) return;
     
@@ -47,28 +48,32 @@ const PutAway = () => {
     setMoveQty('');
     
     try {
-        // A. Cargar Ubicaciones (se mantiene igual)
-        const { data: locs } = await supabase
-            .from('locations')
-            .select('*')
-            .eq('warehouse_id', selectedWarehouse)
-            .order('full_code');
-        setLocations(locs || []);
+        // OPTIMIZACIÓN: Consultas en paralelo con Promise.all
+        const [locsResponse, pendingResponse] = await Promise.all([
+            // A. Cargar solo campos necesarios de ubicaciones
+            supabase
+                .from('locations')
+                .select('id, full_code, zone')
+                .eq('warehouse_id', selectedWarehouse)
+                .order('full_code'),
+            
+            // B. Cargar solo campos necesarios de vista
+            supabase
+                .from('view_pending_putaway')
+                .select('id, code, name, pending_stock')
+                .eq('warehouse_id', selectedWarehouse)
+                .gt('pending_stock', 0) // Solo items con stock pendiente > 0
+        ]);
 
-        // B. CONSULTA OPTIMIZADA A LA VISTA
-        // Ya no descargamos movimientos ni hacemos cálculos manuales
-        const { data: pendingItems, error: viewErr } = await supabase
-            .from('view_pending_putaway')
-            .select('*')
-            .eq('warehouse_id', selectedWarehouse);
+        if (locsResponse.error) throw locsResponse.error;
+        if (pendingResponse.error) throw pendingResponse.error;
 
-        if (viewErr) throw viewErr;
-
-        setStagingItems(pendingItems || []);
+        setLocations(locsResponse.data || []);
+        setStagingItems(pendingResponse.data || []);
 
     } catch (error) {
-        console.error("Error cargando datos optimizados:", error);
-        setErrorMsg("Error al cargar el stock pendiente.");
+        console.error("Error cargando datos:", error);
+        setErrorMsg("Error al cargar el stock pendiente: " + error.message);
     } finally {
         setLoadingItems(false);
     }
@@ -169,7 +174,7 @@ const PutAway = () => {
                 <label className="block text-[10px] font-bold text-stone-400 uppercase">Bodega Operativa</label>
                 <Combobox
                     options={warehouses}
-                    selected={selectedWarehouse}
+                    value={selectedWarehouse}
                     onChange={setSelectedWarehouse}
                     placeholder="-- Seleccionar Bodega --"
                 />
@@ -214,7 +219,7 @@ const PutAway = () => {
                         <div className="text-center mb-6"><div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-3"><Move size={28}/></div><h3 className="text-lg font-black text-stone-800">Ubicar en Rack</h3></div>
                         <div className="space-y-5">
                             <div><label className="text-xs font-bold text-stone-500 uppercase">Cantidad a Guardar</label><div className="flex items-center gap-2"><input type="number" className="flex-1 border-2 border-blue-200 p-3 rounded-xl font-black text-2xl text-center text-blue-600 focus:border-blue-500 outline-none" value={moveQty} onChange={(e) => setMoveQty(e.target.value)} /><span className="text-xs font-bold text-stone-400">/ {selectedItem.pending_stock}</span></div></div>
-                            <div><label className="text-xs font-bold text-stone-500 uppercase flex gap-2 mb-2"><MapPin size={14}/> Destino Físico</label><Combobox options={locations.map(l => ({ id: l.id, name: `${l.full_code} (${l.zone})` }))} selected={targetLocation} onChange={setTargetLocation} placeholder="-- Seleccionar --" /></div>
+                            <div><label className="text-xs font-bold text-stone-500 uppercase flex gap-2 mb-2"><MapPin size={14}/> Destino Físico</label><Combobox options={locations.map(l => ({ id: l.id, name: `${l.full_code} (${l.zone})` }))} value={targetLocation} onChange={setTargetLocation} placeholder="-- Seleccionar --" /></div>
                             <button onClick={handleMove} disabled={!targetLocation || !moveQty} className="w-full bg-stone-900 text-white py-4 rounded-xl font-bold hover:bg-black shadow-lg flex justify-center gap-2"><CheckCircle size={20}/> Confirmar Ubicación</button>
                         </div>
                     </div>

@@ -597,18 +597,18 @@ export default function InboundReception() {
             {/* LÍNEA 1: Cliente (1/3) y Proyecto (2/3) */}
             <div className="md:col-span-1">
                 <Combobox
-                    options={clientsList.map(c => ({ id: c, name: c }))}
-                    value={assignedForm.client_name}
-                    onChange={(val) => {setAssignedForm({...assignedForm, client_name: val, project_name: ''}); setClientCatalog([]);}}
+                    options={clientsList.map((c, idx) => ({ id: `client_${idx}_${c}`, name: c }))}
+                    value={clientsList.map((c, idx) => `client_${idx}_${c}`).find(id => id.endsWith(assignedForm.client_name))}
+                    onChange={(val) => {const name = val.split('_').slice(2).join('_'); setAssignedForm({...assignedForm, client_name: name, project_name: ''}); setClientCatalog([]);}}
                     placeholder="-- Seleccionar Cliente --"
                     label="Cliente"
                 />
             </div>
             <div className="md:col-span-2">
                 <Combobox
-                    options={filteredProjects.map(p => ({ id: p.proyecto, name: p.proyecto }))}
-                    value={assignedForm.project_name}
-                    onChange={(val) => setAssignedForm({...assignedForm, project_name: val})}
+                    options={filteredProjects.map((p, idx) => ({ id: `project_${idx}_${p.proyecto}`, name: p.proyecto }))}
+                    value={filteredProjects.map((p, idx) => `project_${idx}_${p.proyecto}`).find(id => id.endsWith(assignedForm.project_name))}
+                    onChange={(val) => {const name = val.split('_').slice(2).join('_'); setAssignedForm({...assignedForm, project_name: name});}}
                     placeholder={assignedForm.client_name ? '-- Seleccionar Proyecto --' : '-- Primero Cliente --'}
                     label="Proyecto"
                     disabled={!assignedForm.client_name}
@@ -619,9 +619,9 @@ export default function InboundReception() {
             {/* Proveedor ahora es el doble de ancho que Cliente (2 col vs 1 col) */}
             <div className="md:col-span-2">
                 <Combobox
-                    options={suppliersDB.map(s => ({ id: s.nombre, name: s.nombre }))}
-                    value={assignedForm.supplier_name}
-                    onChange={(val) => setAssignedForm({...assignedForm, supplier_name: val})}
+                    options={suppliersDB.map((s, idx) => ({ id: `supplier_${idx}_${s.nombre}`, name: s.nombre }))}
+                    value={suppliersDB.map((s, idx) => `supplier_${idx}_${s.nombre}`).find(id => id.endsWith(assignedForm.supplier_name))}
+                    onChange={(val) => {const name = val.split('_').slice(2).join('_'); setAssignedForm({...assignedForm, supplier_name: name});}}
                     placeholder="-- Seleccionar Proveedor --"
                     label="Proveedor"
                 />

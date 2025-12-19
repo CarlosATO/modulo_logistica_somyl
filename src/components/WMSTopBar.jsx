@@ -14,6 +14,7 @@ export default function WMSTopBar() {
       case '/gestion': return 'Panel de Control';
       case '/gestion/catalogo': return 'Catálogo de Materiales';
       case '/gestion/ingreso': return 'Registro de Ingreso (Recepción)';
+    case '/gestion/historial-ingresos': return 'Historial de Ingresos Directos';
       case '/gestion/salida': return 'Registro de Salida (Despacho)';
       case '/gestion/orden': return 'Orden de Bodega (Put Away)';
       case '/gestion/kardex': return 'Movimientos y Kardex';

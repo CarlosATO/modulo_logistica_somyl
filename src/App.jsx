@@ -18,6 +18,7 @@ import InventoryViewer from './pages/InventoryViewer';
 import PutAway from './pages/PutAway';                   
 import LocationSettings from './pages/LocationSettings'; 
 import TransferMaterial from './pages/TransferMaterial'; 
+import DirectInboundList from './pages/DirectInboundList';
 
 // --- REPORTES (Desde raíz src, según tu foto) ---
 import InventoryReport from './InventoryReport'; // ✅ Importado desde raíz src/
@@ -101,6 +102,7 @@ export default function App() {
             
             <Route path="traspasos" element={<TransferMaterial />} />
             <Route path="catalogo" element={<ProductList />} />
+            <Route path="historial-ingresos" element={<DirectInboundList />} />
             
             {/* 3. Mantenedores */}
             <Route path="bodegas" element={<WarehouseSettings />} />
