@@ -590,32 +590,52 @@ export default function InboundReception() {
 
         {/* --- PESTAÑA ASIGNADO --- */}
         {activeTab === 'ASSIGNED' && (
-            <div className="space-y-6 animate-in fade-in">
-                <div className="bg-white p-5 rounded-xl shadow-sm border border-purple-100 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <Combobox
-                        options={clientsList.map(c => ({ id: c, name: c }))}
-                        value={assignedForm.client_name}
-                        onChange={(val) => {setAssignedForm({...assignedForm, client_name: val, project_name: ''}); setClientCatalog([]);}}
-                        placeholder="-- Seleccionar Cliente --"
-                        label="Cliente"
-                    />
-                    <Combobox
-                        options={filteredProjects.map(p => ({ id: p.proyecto, name: p.proyecto }))}
-                        value={assignedForm.project_name}
-                        onChange={(val) => setAssignedForm({...assignedForm, project_name: val})}
-                        placeholder={assignedForm.client_name ? '-- Seleccionar Proyecto --' : '-- Primero Cliente --'}
-                        label="Proyecto"
-                        disabled={!assignedForm.client_name}
-                    />
-                    <Combobox
-                        options={suppliersDB.map(s => ({ id: s.nombre, name: s.nombre }))}
-                        value={assignedForm.supplier_name}
-                        onChange={(val) => setAssignedForm({...assignedForm, supplier_name: val})}
-                        placeholder="-- Seleccionar Proveedor --"
-                        label="Proveedor"
-                    />
-                    <div><label className="text-xs font-bold text-slate-400 block mb-1">N° Guía</label><input type="text" className="w-full border p-2 rounded-lg font-bold" value={assignedForm.document_number} onChange={e => setAssignedForm({...assignedForm, document_number: e.target.value})} /></div>
-                </div>
+    <div className="space-y-6 animate-in fade-in">
+        {/* REJILLA MEJORADA: Ahora usamos 3 columnas para controlar los anchos */}
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-purple-100 grid grid-cols-1 md:grid-cols-3 gap-4">
+            
+            {/* LÍNEA 1: Cliente (1/3) y Proyecto (2/3) */}
+            <div className="md:col-span-1">
+                <Combobox
+                    options={clientsList.map(c => ({ id: c, name: c }))}
+                    value={assignedForm.client_name}
+                    onChange={(val) => {setAssignedForm({...assignedForm, client_name: val, project_name: ''}); setClientCatalog([]);}}
+                    placeholder="-- Seleccionar Cliente --"
+                    label="Cliente"
+                />
+            </div>
+            <div className="md:col-span-2">
+                <Combobox
+                    options={filteredProjects.map(p => ({ id: p.proyecto, name: p.proyecto }))}
+                    value={assignedForm.project_name}
+                    onChange={(val) => setAssignedForm({...assignedForm, project_name: val})}
+                    placeholder={assignedForm.client_name ? '-- Seleccionar Proyecto --' : '-- Primero Cliente --'}
+                    label="Proyecto"
+                    disabled={!assignedForm.client_name}
+                />
+            </div>
+
+            {/* LÍNEA 2: Proveedor (2/3) y Documento (1/3) */}
+            {/* Proveedor ahora es el doble de ancho que Cliente (2 col vs 1 col) */}
+            <div className="md:col-span-2">
+                <Combobox
+                    options={suppliersDB.map(s => ({ id: s.nombre, name: s.nombre }))}
+                    value={assignedForm.supplier_name}
+                    onChange={(val) => setAssignedForm({...assignedForm, supplier_name: val})}
+                    placeholder="-- Seleccionar Proveedor --"
+                    label="Proveedor"
+                />
+            </div>
+            <div className="md:col-span-1">
+                <label className="text-xs font-bold text-slate-400 block mb-1">N° Guía / Documento</label>
+                <input 
+                    type="text" 
+                    className="w-full border p-2 rounded-lg font-bold focus:border-purple-500 outline-none" 
+                    value={assignedForm.document_number} 
+                    onChange={e => setAssignedForm({...assignedForm, document_number: e.target.value})} 
+                />
+            </div>
+        </div>
 
                 <div className="bg-purple-50 p-5 rounded-xl border border-purple-100 grid grid-cols-12 gap-3 mb-4">
                     <div className="col-span-4">
