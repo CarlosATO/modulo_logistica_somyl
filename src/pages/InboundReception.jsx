@@ -15,7 +15,7 @@ export default function InboundReception() {
   
   // --- ESTADOS GLOBALES ---
   const [warehouses, setWarehouses] = useState([]);
-  const [selectedWarehouse, setSelectedWarehouse] = useState('');
+  const [selectedWarehouse, setSelectedWarehouse] = useState(''); // Sin valor predeterminado
   const [activeTab, setActiveTab] = useState('OC');
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -261,8 +261,11 @@ export default function InboundReception() {
 
             if (rpcError) throw rpcError;
 
-            handleSearchOC(ocNumber); // Refrescar vista
-            setOcInputs(p => ({ ...p, global_doc: '', global_obs: '' }));
+            // Limpiar todos los campos después de grabar
+            setOcNumber('');
+            setOcData(null);
+            setOcHeader(null);
+            setOcInputs({});
             setReceiptFile(null);
             resolve("Recepción procesada correctamente en servidor");
 
@@ -368,6 +371,10 @@ export default function InboundReception() {
         setAssignedForm({ client_name: '', project_name: '', document_number: '', supplier_name: '' });
         setReceiptFile(null);
         setSelectedMaterialId('');
+        setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
+        setClientCatalog([]);
+        setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
+        setClientCatalog([]);
     } catch (err) {
         console.error(err);
         toast.error("Error: " + err.message);
@@ -379,7 +386,10 @@ export default function InboundReception() {
   // ===== Helpers para INGRESO DIRECTO =====
   const handleFileChange = (e) => {
       const f = e?.target?.files?.[0];
-      if (f) setReceiptFile(f);
+      if (f) {
+          setReceiptFile(f);
+          toast.success(`✅ Documento subido con éxito: ${f.name}`);
+      }
   };
 
   const handleAddToDirectCart = () => {
@@ -517,6 +527,16 @@ export default function InboundReception() {
         {/* --- PESTAÑA OC --- */}
         {activeTab === 'OC' && (
             <div className="space-y-6 animate-in fade-in">
+                {!selectedWarehouse ? (
+                    <div className="bg-amber-50 border border-amber-300 p-8 rounded-xl flex items-center gap-4">
+                        <AlertTriangle className="text-amber-600" size={32}/>
+                        <div>
+                            <p className="font-bold text-amber-900 text-lg">Selección de Bodega Requerida</p>
+                            <p className="text-sm text-amber-700 mt-1">Debes seleccionar una bodega antes de continuar con el ingreso.</p>
+                        </div>
+                    </div>
+                ) : (
+                    <>
                         <div className="bg-blue-50 border border-blue-100 p-8 rounded-xl">
                     <div className="text-center mb-4">
                         <h3 className="text-blue-900 font-bold text-lg">Recepción por Orden de Compra</h3>
@@ -541,7 +561,19 @@ export default function InboundReception() {
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-white p-4 rounded-lg border border-slate-200">
                              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">N° Guía / Factura *</label><input type="text" className="w-full px-3 py-2 border rounded-lg outline-none focus:border-blue-500 font-bold" onChange={(e) => setOcInputs(p => ({...p, global_doc: e.target.value}))}/></div>
-                             <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adjuntar Respaldo</label><label className={`flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed rounded-lg cursor-pointer ${receiptFile ? 'bg-emerald-50 border-emerald-300' : 'hover:bg-slate-50'}`}>{receiptFile ? <CheckCircle size={18}/> : <Paperclip size={18}/>}<span className="text-sm font-medium truncate">{receiptFile ? receiptFile.name : 'Subir PDF...'}</span><input type="file" className="hidden" onChange={e => setReceiptFile(e.target.files[0])}/></label></div>
+                             <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adjuntar Respaldo</label>
+                                <label className={`flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed rounded-lg cursor-pointer transition-all ${
+                                    receiptFile ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'hover:bg-slate-50 border-slate-300'
+                                }`}>
+                                    {receiptFile ? <CheckCircle size={18} className="text-emerald-600"/> : <Paperclip size={18} className="text-slate-400"/>}
+                                    <span className="text-sm font-bold">
+                                        {receiptFile ? '📄 Documento Anexado' : 'Subir PDF...'}
+                                    </span>
+                                    <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={handleFileChange}/>
+                                </label>
+                                {receiptFile && <p className="text-[10px] text-emerald-600 mt-1 font-medium truncate">{receiptFile.name}</p>}
+                             </div>
                         </div>
 
                         <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white">
@@ -585,12 +617,24 @@ export default function InboundReception() {
                         </div>
                     </div>
                 )}
+                    </>
+                )}
             </div>
         )}
 
         {/* --- PESTAÑA ASIGNADO --- */}
         {activeTab === 'ASSIGNED' && (
     <div className="space-y-6 animate-in fade-in">
+        {!selectedWarehouse ? (
+            <div className="bg-amber-50 border border-amber-300 p-8 rounded-xl flex items-center gap-4">
+                <AlertTriangle className="text-amber-600" size={32}/>
+                <div>
+                    <p className="font-bold text-amber-900 text-lg">Selección de Bodega Requerida</p>
+                    <p className="text-sm text-amber-700 mt-1">Debes seleccionar una bodega antes de continuar con el ingreso.</p>
+                </div>
+            </div>
+        ) : (
+            <>
         {/* REJILLA MEJORADA: Ahora usamos 3 columnas para controlar los anchos */}
         <div className="bg-white p-5 rounded-xl shadow-sm border border-purple-100 grid grid-cols-1 md:grid-cols-3 gap-4">
             
@@ -667,10 +711,23 @@ export default function InboundReception() {
                         {manualCart.length > 0 && <tfoot className="bg-slate-50"><tr><td colSpan="3" className="px-4 py-3 text-right font-bold uppercase text-slate-500">Total:</td><td className="px-4 py-3 text-right font-black text-lg text-green-700">${manualCart.reduce((sum, i) => sum + (i.quantity * i.price), 0).toLocaleString()}</td><td></td></tr></tfoot>}
                     </table>
                     <div className="p-4 bg-slate-50 border-t flex justify-between items-center">
-                        <label className="flex items-center gap-2 cursor-pointer bg-white border px-3 py-2 rounded-lg hover:bg-slate-50"><UploadCloud size={18} className="text-purple-500"/><span className="text-xs font-bold">{receiptFile ? 'Adjunto OK' : 'Adjuntar Doc'}</span><input type="file" className="hidden" onChange={e => setReceiptFile(e.target.files[0])}/></label>
+                        <div>
+                            <label className={`flex items-center gap-2 cursor-pointer border px-4 py-2 rounded-lg transition-all ${
+                                receiptFile ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-white hover:bg-slate-50 border-slate-300'
+                            }`}>
+                                {receiptFile ? <CheckCircle size={18} className="text-emerald-600"/> : <UploadCloud size={18} className="text-purple-500"/>}
+                                <span className="text-xs font-bold">
+                                    {receiptFile ? '📄 Documento Anexado' : 'Adjuntar Doc'}
+                                </span>
+                                <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={handleFileChange}/>
+                            </label>
+                            {receiptFile && <p className="text-[10px] text-emerald-600 mt-1 font-medium ml-1">{receiptFile.name}</p>}
+                        </div>
                         <button onClick={handleSubmitAssigned} disabled={processing || manualCart.length === 0} className="bg-purple-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-black shadow-lg disabled:opacity-50">{processing ? <Loader className="animate-spin"/> : 'Confirmar Ingreso'}</button>
                     </div>
                 </div>
+                    </>
+                )}
             </div>
         )}
       </div>

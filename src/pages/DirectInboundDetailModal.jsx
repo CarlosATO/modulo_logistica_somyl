@@ -127,10 +127,24 @@ export default function DirectInboundDetailModal({ reception, onClose }) {
                 <div className="flex flex-1 overflow-hidden">
                     {/* Panel Izquierdo: Datos y Tabla */}
                     <div className={`flex-1 overflow-y-auto p-6 space-y-6 ${showPreview ? 'border-r shadow-inner bg-slate-50/30' : ''}`}>
-                        {/* Información General */}
-                        <div className="grid grid-cols-2 gap-4 bg-white p-4 rounded-xl border">
-                            <div><label className="text-[10px] font-bold text-slate-400 uppercase">Proveedor</label><p className="font-bold">{reception.supplier_name || 'N/A'}</p></div>
-                            <div><label className="text-[10px] font-bold text-slate-400 uppercase">Fecha</label><p className="font-bold">{new Date(reception.date).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })}</p></div>
+                        {/* Información General - Grid 2x2 */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-4 rounded-xl border">
+                            <div>
+                                <label className="text-[10px] font-bold text-blue-500 uppercase block">Bodega</label>
+                                <p className="font-bold text-slate-800">{reception.warehouse_name || 'N/A'}</p>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-blue-500 uppercase block">Proyecto</label>
+                                <p className="font-bold text-slate-800">{reception.project_name || 'N/A'}</p>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-blue-500 uppercase block">Proveedor</label>
+                                <p className="font-bold text-slate-800">{reception.supplier_name || 'N/A'}</p>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-bold text-blue-500 uppercase block">Fecha de Ingreso</label>
+                                <p className="font-bold text-slate-800">{new Date(reception.date).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                            </div>
                         </div>
 
                         {/* Alerta de restricciones */}
