@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { supabaseProcurement } from '../services/procurementClient';
 import { useAuth } from '../context/AuthContext';
@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
 import Combobox from '../components/Combobox';
-import { toast } from 'sonner'; // replace alert with toast notifications
+import { toast } from 'sonner'; 
 import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 
 // --- ESTILOS PDF ---
@@ -56,24 +56,23 @@ export default function OutboundDispatch() {
   // Maestros
   const [warehouses, setWarehouses] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [assignedMaterials, setAssignedMaterials] = useState([]); // Para saber el dueño del material
+  const [assignedMaterials, setAssignedMaterials] = useState([]); 
 
   // Cabecera
   const [selectedWarehouse, setSelectedWarehouse] = useState('');
-  const [selectedProject, setSelectedProject] = useState(''); // ID del proyecto
-  const [projectClient, setProjectClient] = useState(''); // Nombre del Cliente del Proyecto (Para filtro)
-  const [receiver, setReceiver] = useState({ name: '', rut: '', plate: '', stage: '' }); // stage = Etapa/Lugar
+  const [selectedProject, setSelectedProject] = useState(''); 
+  const [projectClient, setProjectClient] = useState(''); 
+  const [receiver, setReceiver] = useState({ name: '', rut: '', plate: '', stage: '' }); 
 
   // Picking
-  // search handled via GoogleSearchBar debounce; results stored in searchResults
   const [searchResults, setSearchResults] = useState([]);
   const [cart, setCart] = useState([]);
   
   // MODAL DE PICKING
   const [showPickModal, setShowPickModal] = useState(false);
-  const [pickingProduct, setPickingProduct] = useState(null); // Producto siendo procesado
-  const [pickingLocations, setPickingLocations] = useState([]); // Dónde está ese producto
-  const [pickQuantities, setPickQuantities] = useState({}); // { locationId: cantidad }
+  const [pickingProduct, setPickingProduct] = useState(null); 
+  const [pickingLocations, setPickingLocations] = useState([]); 
+  const [pickQuantities, setPickQuantities] = useState({}); 
 
   // Estado PDF
   const [lastDispatchData, setLastDispatchData] = useState(null);
@@ -89,7 +88,6 @@ export default function OutboundDispatch() {
         const { data: pj } = await supabaseProcurement.from('proyectos').select('id, proyecto, cliente').eq('activo', true);
         setProjects(pj || []);
 
-        // Cargamos catálogo de asignados para saber dueños
         const { data: asm } = await supabase.from('assigned_materials').select('code, client_name');
         setAssignedMaterials(asm || []);
     };
@@ -106,17 +104,12 @@ export default function OutboundDispatch() {
       }
   }, [selectedProject, projects]);
 
-  // Resetear estado del PDF cuando cambie el carrito
   useEffect(() => {
-    if (cart.length === 0) {
-      setPdfDownloaded(false);
-    }
+    if (cart.length === 0) setPdfDownloaded(false);
   }, [cart]);
 
-  // 2. Buscar Producto (Con Filtro de Cliente)
-  // Ahora acepta un término 'term' (pasa desde GoogleSearchBar con debounce)
+  // 2. Buscar Producto (MEJORADO: Filtro por Bodega y Existencia Física)
   const handleSearch = async (term) => {
-    // Si está vacío, limpiamos resultados silenciosamente
     if (!term || term.trim().length === 0) {
         setSearchResults([]);
         return;
@@ -127,48 +120,74 @@ export default function OutboundDispatch() {
         return;
     }
 
-    // Buscar en tabla maestra usando 'term'
-    const { data } = await supabase
+    // A. Buscar productos que coincidan con el término
+    const { data: prods } = await supabase
         .from('products')
         .select('*')
         .ilike('name', `%${term}%`)
-        .gt('current_stock', 0)
-        .limit(15);
-    
-    // FILTRADO INTELIGENTE:
-    const filtered = (data || []).filter(prod => {
+        .limit(20);
+
+    if (!prods || prods.length === 0) {
+        setSearchResults([]);
+        return;
+    }
+
+    // B. Obtener stock FÍSICO en la bodega seleccionada para estos productos
+    const { data: rackStock } = await supabase
+        .from('product_locations')
+        .select('product_id, quantity')
+        .eq('warehouse_id', selectedWarehouse)
+        .in('product_id', prods.map(p => p.id));
+
+    // Agrupar stock físico por producto
+    const stockMap = {};
+    rackStock?.forEach(rs => {
+        stockMap[rs.product_id] = (stockMap[rs.product_id] || 0) + Number(rs.quantity);
+    });
+
+    // C. Cruzar datos y aplicar filtros (Cliente Asignado + Stock Bodega > 0)
+    const enrichedResults = prods.map(p => ({
+        ...p,
+        warehouseStock: stockMap[p.id] || 0
+    })).filter(prod => {
+        // Validación 1: Debe tener stock físico en ESTA bodega (racks)
+        if (prod.warehouseStock <= 0) return false;
+
+        // Validación 2: Filtro de cliente asignado (si aplica)
         const assignedInfo = assignedMaterials.find(a => a.code === prod.code);
         if (!assignedInfo) return true;
         return assignedInfo.client_name === projectClient;
     });
     
-    setSearchResults(filtered);
+    setSearchResults(enrichedResults);
   };
 
-  // 3. Abrir Modal de Picking
+  // 3. Abrir Modal de Picking (SOLO RACKS VALIDADOS)
   const openPickModal = async (product) => {
     setPickingProduct(product);
     setPickQuantities({});
     
-    // Buscar desglose de ubicaciones
+    // Buscar desglose físico de ubicaciones en la bodega seleccionada
     const { data: rackStock } = await supabase
         .from('product_locations')
         .select('*, locations(full_code)')
         .eq('product_id', product.id)
-        .eq('warehouse_id', selectedWarehouse);
+        .eq('warehouse_id', selectedWarehouse)
+        .gt('quantity', 0);
 
-    const totalAllocated = rackStock?.reduce((sum, item) => sum + Number(item.quantity), 0) || 0;
-    const generalStock = product.current_stock - totalAllocated;
-
-    const options = [];
-    if (generalStock > 0) {
-        options.push({ id: 'GENERAL', name: 'RECEPCIÓN / GENERAL - PISO', stock: generalStock, isRack: false });
+    if (!rackStock || rackStock.length === 0) {
+      toast.error("Error: Este producto no tiene stock físico disponible en los racks de esta bodega.");
+      return;
     }
-    rackStock?.forEach(r => {
-        if (r.quantity > 0) {
-            options.push({ id: r.id, name: r.locations?.full_code, stock: r.quantity, isRack: true, locationId: r.location_id });
-        }
-    });
+
+    // Convertimos a formato de opciones para el modal (Solo Racks reales)
+    const options = rackStock.map(r => ({ 
+        id: r.id, 
+        name: r.locations?.full_code || 'UBICACIÓN SIN NOMBRE', 
+        stock: r.quantity, 
+        isRack: true, 
+        locationId: r.location_id 
+    }));
 
     setPickingLocations(options);
     setShowPickModal(true);
@@ -197,17 +216,16 @@ export default function OutboundDispatch() {
       });
 
       if (totalPicked === 0) {
-          toast.error("⚠️ Ingresa una cantidad válida.");
+          toast.error("⚠️ Ingresa una cantidad válida para retirar.");
           return;
       }
       
       setCart([...cart, ...newCartItems]);
       setShowPickModal(false);
-      // Filtrar el producto específico de los resultados de búsqueda
       setSearchResults(searchResults.filter(prod => prod.id !== pickingProduct.id));
   };
 
-  // 5. Procesar Despacho (VERSIÓN MEJORADA - RPC)
+  // 5. Procesar Despacho
   const handleDispatch = async () => {
     if (!selectedWarehouse) return toast.error("⚠️ Selecciona la Bodega de Origen.");
     if (!selectedProject) return toast.error("⚠️ Selecciona el Proyecto de Destino.");
@@ -219,7 +237,6 @@ export default function OutboundDispatch() {
     try {
         const folio = `SAL-${Date.now().toString().slice(-6)}`;
 
-        // Preparamos los items para el RPC
         const itemsToProcess = cart.map(item => ({
             productId: item.productId,
             quantity: item.quantity,
@@ -230,7 +247,6 @@ export default function OutboundDispatch() {
             locationName: item.locationName
         }));
 
-        // Llamada única al servidor (Atómica)
         const { error: rpcError } = await supabase.rpc('dispatch_materials', {
             p_warehouse_id: selectedWarehouse,
             p_project_id: Number(selectedProject),
@@ -244,10 +260,8 @@ export default function OutboundDispatch() {
 
         if (rpcError) throw rpcError;
 
-        // Update general product stock for all dispatches
-        // Since RPC has issues updating products table, we handle it here
+        // Sincronizar stock maestro (global) tras despacho exitoso
         for (const item of cart) {
-            // Get current stock first
             const { data: productData } = await supabase
                 .from('products')
                 .select('current_stock')
@@ -256,18 +270,10 @@ export default function OutboundDispatch() {
             
             if (productData) {
                 const newStock = Math.max(0, productData.current_stock - item.quantity);
-                const { error: stockError } = await supabase
-                    .from('products')
-                    .update({ current_stock: newStock })
-                    .eq('id', item.productId);
-                
-                if (stockError) {
-                    console.error('Error updating general stock:', stockError);
-                }
+                await supabase.from('products').update({ current_stock: newStock }).eq('id', item.productId);
             }
         }
 
-        // Preparar datos para el PDF (se mantiene igual)
         const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
         const prj = projects.find(p => p.id === Number(selectedProject));
         
@@ -281,184 +287,182 @@ export default function OutboundDispatch() {
 
         setCart([]);
         setReceiver({ name: '', rut: '', plate: '', stage: '' });
-        setPdfDownloaded(false); // Resetear estado del PDF
-        
-        toast.success(`✅ Salida ${folio} registrada exitosamente`);
+        setPdfDownloaded(false);
+        toast.success(`✅ Despacho ${folio} completado con éxito.`);
 
     } catch (err) {
         console.error(err);
-        toast.error(`❌ ${err.message || "Error al procesar el despacho"}`);
+        toast.error(`❌ Error al procesar: ${err.message || "Fallo en la base de datos"}`);
     } finally {
         setIsProcessing(false);
     }
   };
 
-  // 6. Marcar PDF como descargado
-  const handlePdfDownloaded = () => {
-    setPdfDownloaded(true);
-  };
+  const handlePdfDownloaded = () => setPdfDownloaded(true);
 
-  // Preparar datos del PDF preview
+  // Preview Data
   const selectedProj = projects.find(p => p.id === Number(selectedProject));
   const pdfPreviewData = {
-    id: 'PREVIEW',
-    folio: 'PREVIEW',
+    id: 'PREVIEW', folio: 'PREVIEW',
     warehouseName: warehouses.find(w => w.id === selectedWarehouse)?.name || '',
-    projectName: selectedProj ? `${selectedProj.proyecto} (${selectedProj.cliente})` : 'Externo',
+    projectName: selectedProj ? `${selectedProj.proyecto} (${selectedProj.cliente})` : 'Cargando...',
     stage: receiver.stage,
-    receiverName: receiver.name,
-    receiverRut: receiver.rut,
-    receiverPlate: receiver.plate,
+    receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
     items: cart
   };
 
   return (
     <div className="space-y-6 pb-20 relative">
       
-      {/* Cabecera */}
+      {/* 1. SELECCIÓN DE CABECERA */}
       <div className="bg-white p-6 rounded-xl shadow-sm border grid grid-cols-1 md:grid-cols-2 gap-6">
           <Combobox
               options={warehouses}
               value={selectedWarehouse}
-              onChange={setSelectedWarehouse}
-              placeholder="-- Seleccionar Bodega --"
-              label="Bodega Origen"
+              onChange={(val) => { setSelectedWarehouse(val); setSearchResults([]); setCart([]); }}
+              placeholder="-- Seleccionar Bodega Origen --"
+              label="Bodega de Origen (Donde sale el material)"
           />
           <div>
               <Combobox
                   options={projects.map(p => ({ id: p.id, name: `${p.proyecto} (${p.cliente})` }))}
                   value={selectedProject}
                   onChange={setSelectedProject}
-                  placeholder="-- Seleccionar Proyecto --"
-                  label="Proyecto Destino (Externo)"
+                  placeholder="-- Seleccionar Proyecto Destino --"
+                  label="Proyecto / Cliente Destino"
               />
-              {projectClient && <p className="text-xs text-blue-600 mt-1 font-bold">Cliente detectado: {projectClient}</p>}
+              {projectClient && <p className="text-xs text-indigo-600 mt-1 font-black">Cliente: {projectClient}</p>}
           </div>
       </div>
 
-      {/* Datos Receptor */}
+      {/* 2. DATOS DEL RECEPTOR */}
       <div className="bg-white p-6 rounded-xl shadow-sm border">
-          <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><User size={18}/> Receptor y Detalle</h3>
+          <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><User size={18}/> Datos del Receptor y Lugar</h3>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <input className="border p-2 rounded" placeholder="Nombre" value={receiver.name} onChange={e=>setReceiver({...receiver, name:e.target.value})}/>
-              <input className="border p-2 rounded" placeholder="RUT" value={receiver.rut} onChange={e=>setReceiver({...receiver, rut:e.target.value})}/>
-              <input className="border p-2 rounded" placeholder="Patente (Opc)" value={receiver.plate} onChange={e=>setReceiver({...receiver, plate:e.target.value})}/>
-              <input className="border p-2 rounded bg-yellow-50 border-yellow-200" placeholder="Etapa / Lugar (Ej: Piso 3)" value={receiver.stage} onChange={e=>setReceiver({...receiver, stage:e.target.value})}/>
+              <input className="border p-2 rounded focus:ring-2 focus:ring-blue-100 outline-none" placeholder="Nombre Receptor" value={receiver.name} onChange={e=>setReceiver({...receiver, name:e.target.value})}/>
+              <input className="border p-2 rounded focus:ring-2 focus:ring-blue-100 outline-none" placeholder="RUT" value={receiver.rut} onChange={e=>setReceiver({...receiver, rut:e.target.value})}/>
+              <input className="border p-2 rounded focus:ring-2 focus:ring-blue-100 outline-none" placeholder="Patente Vehículo" value={receiver.plate} onChange={e=>setReceiver({...receiver, plate:e.target.value})}/>
+              <input className="border p-2 rounded bg-yellow-50 border-yellow-200 outline-none" placeholder="Ubicación Destino (Etapa)" value={receiver.stage} onChange={e=>setReceiver({...receiver, stage:e.target.value})}/>
           </div>
       </div>
 
-      {/* Buscador y Tabla */}
+      {/* 3. BÚSQUEDA Y CARRITO */}
       {selectedWarehouse && selectedProject && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            {/* Buscador lateral */}
             <div className="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border h-fit">
                 <div className="mb-6">
-                <GoogleSearchBar 
-                    placeholder="Buscar producto para despachar..." 
-                    onSearch={(val) => handleSearch(val)} 
-                />
-            </div>
-                <div className="space-y-2 max-h-80 overflow-y-auto">
-                    {searchResults.length === 0 && <p className="text-center text-slate-400 py-4 text-sm">Escribe para buscar...</p>}
+                    <GoogleSearchBar 
+                        placeholder="Buscar material por nombre o código..." 
+                        onSearch={(val) => handleSearch(val)} 
+                    />
+                </div>
+                <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
+                    {searchResults.length === 0 && <p className="text-center text-slate-400 py-10 text-sm italic">Usa el buscador para encontrar materiales en esta bodega...</p>}
                     {searchResults.map(prod => (
-                        <div key={prod.id} onClick={()=>openPickModal(prod)} className="p-3 border rounded cursor-pointer hover:bg-blue-50 transition-colors flex justify-between items-center group">
-                            <div>
-                                <div className="font-bold text-sm text-slate-700 group-hover:text-blue-700">{prod.name}</div>
-                                <div className="text-xs text-slate-500">{prod.code}</div>
+                        <div key={prod.id} onClick={()=>openPickModal(prod)} className="p-3 border rounded-lg cursor-pointer hover:bg-indigo-50 hover:border-indigo-300 transition-all flex justify-between items-center group shadow-sm">
+                            <div className="flex-1">
+                                <div className="font-bold text-sm text-slate-700 group-hover:text-indigo-700 transition-colors uppercase">{prod.name}</div>
+                                <div className="text-[10px] font-mono text-slate-400">{prod.code}</div>
                             </div>
-                            <span className="bg-slate-100 group-hover:bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded font-bold">{prod.current_stock}</span>
+                            <div className="text-right ml-4">
+                                <span className="bg-indigo-100 text-indigo-700 text-lg px-3 py-1 rounded-lg font-black">{prod.warehouseStock}</span>
+                                <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">Disp. Bodega</p>
+                            </div>
                         </div>
                     ))}
                 </div>
             </div>
 
-            <div className="lg:col-span-7 bg-slate-50 p-6 rounded-xl border flex flex-col">
-                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><Truck size={18}/> Carrito de Salida</h3>
-                <div className="flex-1 bg-white rounded-lg border overflow-hidden mb-4 min-h-[200px]">
+            {/* Carrito Picking */}
+            <div className="lg:col-span-7 bg-slate-50 p-6 rounded-xl border flex flex-col min-h-[500px]">
+                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2 uppercase tracking-wider"><Truck size={18}/> Artículos para Salida</h3>
+                
+                <div className="flex-1 bg-white rounded-xl border shadow-inner overflow-hidden mb-6">
                     <table className="w-full text-sm text-left">
-                        <thead className="bg-slate-100 font-bold text-xs uppercase"><tr><th className="p-3">Item</th><th className="p-3">Origen</th><th className="p-3 text-center">Cant</th><th className="p-3"></th></tr></thead>
-                        <tbody>
+                        <thead className="bg-slate-100 font-black text-[10px] text-slate-500 uppercase">
+                            <tr><th className="p-4">Material</th><th className="p-4">Origen Rack</th><th className="p-4 text-center">Cant.</th><th className="p-4"></th></tr>
+                        </thead>
+                        <tbody className="divide-y">
                             {cart.map((item, i) => (
-                                <tr key={i}>
-                                    <td className="p-3"><div className="font-bold">{item.name}</div><div className="text-xs text-slate-400">{item.code}</div></td>
-                                    <td className="p-3 text-xs text-blue-600">{item.locationName}</td>
-                                    <td className="p-3 text-center font-bold">{item.quantity}</td>
-                                    <td className="p-3 text-right"><button onClick={()=>setCart(cart.filter((_, idx)=>idx!==i))} className="text-red-400"><X size={16}/></button></td>
+                                <tr key={item.uid} className="hover:bg-slate-50">
+                                    <td className="p-4"><div className="font-bold text-slate-800">{item.name}</div><div className="text-[10px] font-mono text-slate-400">{item.code}</div></td>
+                                    <td className="p-4 text-xs font-bold text-indigo-600 uppercase">{item.locationName}</td>
+                                    <td className="p-4 text-center"><span className="text-lg font-black">{item.quantity}</span></td>
+                                    <td className="p-4 text-right">
+                                        <button onClick={()=>setCart(cart.filter((_, idx)=>idx!==i))} className="text-red-300 hover:text-red-500 transition-colors"><X size={20}/></button>
+                                    </td>
                                 </tr>
                             ))}
+                            {cart.length === 0 && <tr><td colSpan="4" className="py-20 text-center text-slate-400 italic">El carrito está vacío</td></tr>}
                         </tbody>
                     </table>
                 </div>
-                <div className="flex justify-end gap-3">
-                    {cart.length > 0 && (
-                        <PDFDownloadLink
-                            document={<DispatchDocument data={pdfPreviewData} />}
-                            fileName="Despacho_Preview.pdf"
+
+                <div className="flex justify-between items-center bg-white p-4 rounded-xl border shadow-sm">
+                    <div className="text-xs">
+                        <span className="block text-slate-400 font-bold uppercase tracking-widest">Total Ítems</span>
+                        <span className="text-2xl font-black text-slate-800">{cart.length}</span>
+                    </div>
+                    <div className="flex gap-4">
+                        {cart.length > 0 && (
+                            <PDFDownloadLink document={<DispatchDocument data={pdfPreviewData} />} fileName={`PREVIEW_SALIDA.pdf`}>
+                                {({ loading }) => (
+                                    <button onClick={handlePdfDownloaded} disabled={loading} className={`px-6 py-3 rounded-xl font-bold border transition-all flex items-center gap-2 ${pdfDownloaded ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-white text-indigo-600 border-indigo-600 hover:bg-indigo-50'}`}>
+                                        <FileText size={18}/> {pdfDownloaded ? 'Documento Listo ✓' : 'Generar Guía PDF'}
+                                    </button>
+                                )}
+                            </PDFDownloadLink>
+                        )}
+                        <button
+                            onClick={handleDispatch}
+                            disabled={isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name}
+                            className={`px-8 py-3 rounded-xl font-black shadow-lg flex items-center gap-2 transition-all ${ (isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105 active:scale-95' }`}
                         >
-                            {({ loading }) => (
-                                <button
-                                    onClick={handlePdfDownloaded}
-                                    disabled={loading}
-                                    className={
-                                        pdfDownloaded
-                                            ? 'px-4 py-2 font-bold rounded border transition-all flex items-center gap-2 bg-green-100 text-green-700 border-green-300'
-                                            : 'px-4 py-2 font-bold rounded border transition-all flex items-center gap-2 bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
-                                    }>
-                                    <FileText size={16}/>
-                                    {pdfDownloaded ? 'PDF Descargado ✓' : 'Descargar PDF'}
-                                </button>
-                            )}
-                        </PDFDownloadLink>
-                    )}
-                    <button
-                        onClick={handleDispatch}
-                        disabled={isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name || !pdfDownloaded}
-                        className={
-                            (isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name || !pdfDownloaded)
-                                ? 'px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all bg-slate-300 text-slate-500 cursor-not-allowed'
-                                : 'px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all bg-orange-600 text-white hover:bg-orange-700 hover:scale-105'
-                        }>
-                        {isProcessing ? <Loader className="animate-spin"/> : 'Confirmar Salida'}
-                    </button>
+                            {isProcessing ? <Loader className="animate-spin"/> : <><CheckCircle size={18}/> Confirmar Despacho</>}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
       )}
 
-      {/* MODAL PICKING */}
+      {/* 4. MODAL DE DISTRIBUCIÓN FÍSICA (PICKING) */}
       {showPickModal && pickingProduct && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in duration-200">
-                <div className="p-5 border-b bg-slate-50 flex justify-between items-center">
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-md">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                <div className="p-6 border-b bg-slate-50 flex justify-between items-center">
                     <div>
-                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Package className="text-orange-500"/> Distribución de Retiro</h3>
-                        <p className="text-sm text-slate-500">{pickingProduct.name} ({pickingProduct.code})</p>
+                        <h3 className="text-xl font-black text-slate-800 flex items-center gap-2 uppercase tracking-tight"><Package className="text-indigo-600"/> Distribución de Retiro</h3>
+                        <p className="text-sm font-medium text-slate-500">{pickingProduct.name} | Código: <span className="font-mono text-indigo-600">{pickingProduct.code}</span></p>
                     </div>
-                    <button onClick={()=>setShowPickModal(false)}><X size={24} className="text-slate-400"/></button>
+                    <button onClick={()=>setShowPickModal(false)} className="bg-white p-2 rounded-full border hover:bg-red-50 hover:text-red-500 transition-all"><X size={20}/></button>
                 </div>
                 
-                <div className="p-0 max-h-[60vh] overflow-y-auto">
+                <div className="p-2 max-h-[55vh] overflow-y-auto">
                     <table className="w-full text-left">
-                        <thead className="bg-slate-100 text-slate-500 text-xs uppercase font-bold sticky top-0">
-                            <tr><th className="p-4">Ubicación / Zona</th><th className="p-4 text-center">Stock Actual</th><th className="p-4 text-center w-32">A Retirar</th></tr>
+                        <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-black sticky top-0 z-10">
+                            <tr><th className="p-4">Ubicación Rack</th><th className="p-4 text-center">Disponible</th><th className="p-4 text-center">Cantidad a Retirar</th></tr>
                         </thead>
                         <tbody className="divide-y">
                             {pickingLocations.map(loc => (
-                                <tr key={loc.id} className="hover:bg-slate-50">
+                                <tr key={loc.id} className="hover:bg-indigo-50/30 transition-colors">
                                     <td className="p-4">
-                                        <div className="font-bold text-slate-700">{loc.name}</div>
-                                        <div className="text-xs text-slate-400">{loc.isRack ? 'Estantería' : 'Piso / Recepción'}</div>
+                                        <div className="font-black text-lg text-slate-800">{loc.name}</div>
+                                        <div className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Estantería Validada</div>
                                     </td>
                                     <td className="p-4 text-center">
-                                        <div className="text-lg font-bold text-blue-600">{loc.stock}</div>
-                                        <div className="text-[10px] text-slate-400">UN</div>
+                                        <div className="text-2xl font-black text-slate-400">{loc.stock}</div>
+                                        <div className="text-[10px] font-bold uppercase">Unidades</div>
                                     </td>
                                     <td className="p-4">
                                         <input 
                                             type="number" 
-                                            min="0" 
-                                            max={loc.stock} 
-                                            className="w-full border-2 border-slate-200 rounded-lg p-2 text-center font-bold text-lg focus:border-blue-500 outline-none"
+                                            min="0" max={loc.stock} 
+                                            className="w-full border-2 border-slate-200 rounded-xl p-3 text-center font-black text-xl focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none transition-all"
                                             placeholder="0"
+                                            value={pickQuantities[loc.id] || ''}
                                             onChange={(e) => {
                                                 const val = Math.min(Number(e.target.value), loc.stock);
                                                 setPickQuantities({...pickQuantities, [loc.id]: val});
@@ -471,14 +475,15 @@ export default function OutboundDispatch() {
                     </table>
                 </div>
 
-                <div className="p-5 border-t bg-slate-50 flex justify-between items-center">
-                    <div className="text-sm text-slate-500">
-                        Total a retirar: <span className="font-bold text-slate-800 text-lg ml-2">
-                            {Object.values(pickQuantities).reduce((a, b) => a + Number(b), 0)} UN
+                <div className="p-6 border-t bg-slate-50 flex justify-between items-center">
+                    <div className="bg-white px-6 py-3 rounded-xl border">
+                        <span className="text-xs font-bold text-slate-400 uppercase block tracking-widest">Total Selección</span>
+                        <span className="font-black text-3xl text-indigo-600">
+                            {Object.values(pickQuantities).reduce((a, b) => a + Number(b), 0)} <span className="text-sm">UN</span>
                         </span>
                     </div>
-                    <button onClick={handleConfirmPick} className="bg-slate-800 text-white px-6 py-3 rounded-lg font-bold hover:bg-black shadow-lg flex items-center gap-2">
-                        <Plus size={18}/> Agregar al Carrito
+                    <button onClick={handleConfirmPick} className="bg-indigo-600 text-white px-10 py-4 rounded-xl font-black hover:bg-indigo-700 shadow-xl shadow-indigo-200 transition-all flex items-center gap-3 active:scale-95">
+                        <Plus size={20}/> Agregar Artículos
                     </button>
                 </div>
             </div>
