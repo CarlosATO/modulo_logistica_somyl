@@ -78,6 +78,7 @@ export default function OutboundDispatch() {
   // Estado PDF
   const [lastDispatchData, setLastDispatchData] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [pdfDownloaded, setPdfDownloaded] = useState(false);
 
   // 1. Cargar Datos Iniciales
   useEffect(() => {
@@ -104,6 +105,13 @@ export default function OutboundDispatch() {
           setProjectClient('');
       }
   }, [selectedProject, projects]);
+
+  // Resetear estado del PDF cuando cambie el carrito
+  useEffect(() => {
+    if (cart.length === 0) {
+      setPdfDownloaded(false);
+    }
+  }, [cart]);
 
   // 2. Buscar Producto (Con Filtro de Cliente)
   // Ahora acepta un término 'term' (pasa desde GoogleSearchBar con debounce)
@@ -195,7 +203,8 @@ export default function OutboundDispatch() {
       
       setCart([...cart, ...newCartItems]);
       setShowPickModal(false);
-      setSearchResults([]);
+      // Filtrar el producto específico de los resultados de búsqueda
+      setSearchResults(searchResults.filter(prod => prod.id !== pickingProduct.id));
   };
 
   // 5. Procesar Despacho (VERSIÓN MEJORADA - RPC)
@@ -249,6 +258,7 @@ export default function OutboundDispatch() {
 
         setCart([]);
         setReceiver({ name: '', rut: '', plate: '', stage: '' });
+        setPdfDownloaded(false); // Resetear estado del PDF
         
         toast.success(`✅ Salida ${folio} registrada exitosamente`);
 
@@ -258,6 +268,25 @@ export default function OutboundDispatch() {
     } finally {
         setIsProcessing(false);
     }
+  };
+
+  // 6. Marcar PDF como descargado
+  const handlePdfDownloaded = () => {
+    setPdfDownloaded(true);
+  };
+
+  // Preparar datos del PDF preview
+  const selectedProj = projects.find(p => p.id === Number(selectedProject));
+  const pdfPreviewData = {
+    id: 'PREVIEW',
+    folio: 'PREVIEW',
+    warehouseName: warehouses.find(w => w.id === selectedWarehouse)?.name || '',
+    projectName: selectedProj ? `${selectedProj.proyecto} (${selectedProj.cliente})` : 'Externo',
+    stage: receiver.stage,
+    receiverName: receiver.name,
+    receiverRut: receiver.rut,
+    receiverPlate: receiver.plate,
+    items: cart
   };
 
   return (
@@ -337,15 +366,34 @@ export default function OutboundDispatch() {
                     </table>
                 </div>
                 <div className="flex justify-end gap-3">
-                    {lastDispatchData && <PDFDownloadLink document={<DispatchDocument data={lastDispatchData}/>} fileName="Despacho.pdf"><button className="text-blue-600 px-4 py-2 font-bold bg-white border rounded">Descargar PDF</button></PDFDownloadLink>}
-                    <button 
-                        onClick={handleDispatch} 
-                        disabled={isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name} 
-                        className={`px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all
-                            ${(isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name)
-                                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                                : 'bg-orange-600 text-white hover:bg-orange-700 hover:scale-105'
-                            }`}>
+                    {cart.length > 0 && (
+                        <PDFDownloadLink
+                            document={<DispatchDocument data={pdfPreviewData} />}
+                            fileName="Despacho_Preview.pdf"
+                        >
+                            {({ loading }) => (
+                                <button
+                                    onClick={handlePdfDownloaded}
+                                    disabled={loading}
+                                    className={
+                                        pdfDownloaded
+                                            ? 'px-4 py-2 font-bold rounded border transition-all flex items-center gap-2 bg-green-100 text-green-700 border-green-300'
+                                            : 'px-4 py-2 font-bold rounded border transition-all flex items-center gap-2 bg-blue-600 text-white border-blue-600 hover:bg-blue-700'
+                                    }>
+                                    <FileText size={16}/>
+                                    {pdfDownloaded ? 'PDF Descargado ✓' : 'Descargar PDF'}
+                                </button>
+                            )}
+                        </PDFDownloadLink>
+                    )}
+                    <button
+                        onClick={handleDispatch}
+                        disabled={isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name || !pdfDownloaded}
+                        className={
+                            (isProcessing || cart.length === 0 || !selectedWarehouse || !selectedProject || !receiver.name || !pdfDownloaded)
+                                ? 'px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all bg-slate-300 text-slate-500 cursor-not-allowed'
+                                : 'px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transition-all bg-orange-600 text-white hover:bg-orange-700 hover:scale-105'
+                        }>
                         {isProcessing ? <Loader className="animate-spin"/> : 'Confirmar Salida'}
                     </button>
                 </div>
