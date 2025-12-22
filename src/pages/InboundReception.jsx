@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
     Search, Truck, UploadCloud, Plus, Trash2, CheckCircle, 
     Loader, Building, Calendar, Paperclip, FileText, Package, AlertCircle, Hash, Save, ShoppingCart, AlertTriangle
@@ -43,9 +43,10 @@ export default function InboundReception() {
   const [manualCart, setManualCart] = useState([]);
   const [selectedMaterialId, setSelectedMaterialId] = useState(''); 
   const [newItem, setNewItem] = useState({ 
-    code: '', name: '', quantity: '', unit: 'UN', price: '' 
+    code: '', name: '', quantity: '', unit: 'UN', price: '0' 
   });
   const [receiptFile, setReceiptFile] = useState(null);
+  const materialComboboxRef = useRef(null);
 
     // --- ESTADOS INGRESO DIRECTO ---
     const [products, setProducts] = useState([]);
@@ -125,10 +126,10 @@ export default function InboundReception() {
               name: material.description, 
               unit: material.unit || 'UN',
               quantity: '', 
-              price: ''
+              price: '0'
           });
       } else {
-          setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
+          setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '0' });
       }
   };
 
@@ -286,13 +287,21 @@ export default function InboundReception() {
   // 4. LÓGICA ASIGNADOS
   // ==========================================
   const addManualItem = () => {
-    if (!selectedMaterialId || !newItem.quantity || !newItem.price) {
-        toast.error('Faltan datos (Selección, Cantidad o Precio).');
+    if (!selectedMaterialId || !newItem.quantity) {
+        toast.error('Faltan datos (Selección y Cantidad requeridos).');
         return;
     }
     setManualCart([...manualCart, { ...newItem }]);
-    setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
+    setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '0' });
     setSelectedMaterialId('');
+    
+    // Enfocar el Combobox de Material después de agregar
+    setTimeout(() => {
+      if (materialComboboxRef.current) {
+        const button = materialComboboxRef.current.querySelector('button');
+        if (button) button.focus();
+      }
+    }, 100);
   };
 
   const removeManualItem = (idx) => {
@@ -371,10 +380,11 @@ export default function InboundReception() {
         setAssignedForm({ client_name: '', project_name: '', document_number: '', supplier_name: '' });
         setReceiptFile(null);
         setSelectedMaterialId('');
-        setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
+        setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '0' });
         setClientCatalog([]);
-        setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '' });
-        setClientCatalog([]);
+        
+        // Scroll suave al inicio para volver al selector de cliente
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
         console.error(err);
         toast.error("Error: " + err.message);
@@ -642,7 +652,7 @@ export default function InboundReception() {
             <div className="md:col-span-1">
                 <Combobox
                     options={clientsList.map((c, idx) => ({ id: `client_${idx}_${c}`, name: c }))}
-                    value={clientsList.map((c, idx) => `client_${idx}_${c}`).find(id => id.endsWith(assignedForm.client_name))}
+                    value={assignedForm.client_name ? clientsList.map((c, idx) => `client_${idx}_${c}`).find(id => id.endsWith(assignedForm.client_name)) : ''}
                     onChange={(val) => {const name = val.split('_').slice(2).join('_'); setAssignedForm({...assignedForm, client_name: name, project_name: ''}); setClientCatalog([]);}}
                     placeholder="-- Seleccionar Cliente --"
                     label="Cliente"
@@ -651,7 +661,7 @@ export default function InboundReception() {
             <div className="md:col-span-2">
                 <Combobox
                     options={filteredProjects.map((p, idx) => ({ id: `project_${idx}_${p.proyecto}`, name: p.proyecto }))}
-                    value={filteredProjects.map((p, idx) => `project_${idx}_${p.proyecto}`).find(id => id.endsWith(assignedForm.project_name))}
+                    value={assignedForm.project_name ? filteredProjects.map((p, idx) => `project_${idx}_${p.proyecto}`).find(id => id.endsWith(assignedForm.project_name)) : ''}
                     onChange={(val) => {const name = val.split('_').slice(2).join('_'); setAssignedForm({...assignedForm, project_name: name});}}
                     placeholder={assignedForm.client_name ? '-- Seleccionar Proyecto --' : '-- Primero Cliente --'}
                     label="Proyecto"
@@ -664,7 +674,7 @@ export default function InboundReception() {
             <div className="md:col-span-2">
                 <Combobox
                     options={suppliersDB.map((s, idx) => ({ id: `supplier_${idx}_${s.nombre}`, name: s.nombre }))}
-                    value={suppliersDB.map((s, idx) => `supplier_${idx}_${s.nombre}`).find(id => id.endsWith(assignedForm.supplier_name))}
+                    value={assignedForm.supplier_name ? suppliersDB.map((s, idx) => `supplier_${idx}_${s.nombre}`).find(id => id.endsWith(assignedForm.supplier_name)) : ''}
                     onChange={(val) => {const name = val.split('_').slice(2).join('_'); setAssignedForm({...assignedForm, supplier_name: name});}}
                     placeholder="-- Seleccionar Proveedor --"
                     label="Proveedor"
@@ -675,6 +685,7 @@ export default function InboundReception() {
                 <input 
                     type="text" 
                     className="w-full border p-2 rounded-lg font-bold focus:border-purple-500 outline-none" 
+                    placeholder="Ej: 12345"
                     value={assignedForm.document_number} 
                     onChange={e => setAssignedForm({...assignedForm, document_number: e.target.value})} 
                 />
@@ -682,7 +693,7 @@ export default function InboundReception() {
         </div>
 
                 <div className="bg-purple-50 p-5 rounded-xl border border-purple-100 grid grid-cols-12 gap-3 mb-4">
-                    <div className="col-span-4">
+                    <div className="col-span-4" ref={materialComboboxRef}>
                         <Combobox
                             options={clientCatalog.map(m => ({ id: m.id, name: `${m.description} (${m.code})` }))}
                             value={selectedMaterialId}
@@ -691,9 +702,9 @@ export default function InboundReception() {
                             label={`Material ${assignedForm.client_name ? '(' + assignedForm.client_name + ')' : ''}`}
                         />
                     </div>
-                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Código</label><input type="text" className="w-full p-2 rounded border border-purple-200 bg-white opacity-80" value={newItem.code} readOnly /></div>
-                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Cant.</label><input type="number" className="w-full p-2 rounded border border-purple-200 font-bold text-center" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: e.target.value})} /></div>
-                    <div className="col-span-2"><label className="text-[10px] font-bold text-green-700 uppercase">Precio ($)</label><input type="number" className="w-full p-2 rounded border border-green-200 font-bold text-green-800" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} /></div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Código</label><input type="text" className="w-full p-2 rounded border border-purple-200 bg-slate-50 text-slate-500" placeholder="Auto" value={newItem.code} readOnly /></div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Cant.</label><input type="number" className="w-full p-2 rounded border border-purple-200 font-bold text-center" placeholder="0" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: e.target.value})} /></div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-green-700 uppercase">Precio ($)</label><input type="number" className="w-full p-2 rounded border border-green-200 font-bold text-green-800" placeholder="0" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} /></div>
                     <div className="col-span-2 flex items-end"><button onClick={addManualItem} className="w-full bg-purple-600 text-white p-2 rounded-lg font-bold hover:bg-purple-700 flex justify-center gap-1"><Plus size={18}/> Agregar</button></div>
                 </div>
 
