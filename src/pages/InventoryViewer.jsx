@@ -172,23 +172,25 @@ export default function InventoryViewer() {
   const kardexWithBalance = useMemo(() => {
       // Agrupar movimientos por producto para calcular saldos individuales
       const productMovements = {};
-      
+
       filteredMovements.forEach(mov => {
           if (!mov.product_id) return;
-          
+
           if (!productMovements[mov.product_id]) {
               productMovements[mov.product_id] = [];
           }
           productMovements[mov.product_id].push(mov);
       });
 
-      // Para cada producto, calcular saldo acumulado (orden cronológico inverso)
+      // Para cada producto, calcular saldo acumulado correctamente
       const result = [];
       Object.keys(productMovements).forEach(productId => {
-          const movs = productMovements[productId].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // Más reciente primero
+          // Ordenar movimientos de más antiguo a más reciente para calcular saldo correctamente
+          const movs = productMovements[productId].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
           let runningBalance = 0;
-          
-          movs.forEach(mov => {
+
+          // Calcular saldo acumulado desde el inicio hasta el final
+          const movementsWithBalance = movs.map(mov => {
               const quantity = Number(mov.quantity);
               if (mov.type === 'INBOUND' || mov.type === 'TRANSFER_IN') {
                   runningBalance += quantity;
@@ -196,28 +198,32 @@ export default function InventoryViewer() {
                   runningBalance -= quantity;
               }
               // PUTAWAY no afecta el saldo total, es solo ubicación interna
-              
-              result.push({
+
+              return {
                   ...mov,
                   balance: runningBalance
-              });
+              };
           });
+
+          // Agregar al resultado final
+          result.push(...movementsWithBalance);
       });
-      
+
+      // Ordenar todos los movimientos de más reciente a más antiguo para mostrar
+      let finalResult = result.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
       // Filtrar por producto seleccionado si existe
-      let filteredResult = result.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      
       if (selectedProduct) {
-          filteredResult = filteredResult.filter(mov => mov.product_id === selectedProduct);
+          finalResult = finalResult.filter(mov => mov.product_id === selectedProduct);
       }
 
       // Filtrar movimientos de ubicación si no se quieren mostrar
       if (!showPutawayMovements) {
-          filteredResult = filteredResult.filter(mov => mov.type !== 'PUTAWAY');
+          finalResult = finalResult.filter(mov => mov.type !== 'PUTAWAY');
       }
-      
-      return filteredResult;
-  }, [filteredMovements, selectedProduct]);
+
+      return finalResult;
+  }, [filteredMovements, selectedProduct, showPutawayMovements]);
 
   // --- CALCULAR TOTALES POR PRODUCTO ---
   const productTotals = useMemo(() => {
