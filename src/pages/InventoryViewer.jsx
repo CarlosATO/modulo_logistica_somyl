@@ -22,10 +22,23 @@ export default function InventoryViewer() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [selectedProduct, setSelectedProduct] = useState(null); // Para filtrar Kardex por producto
+  const [showPutawayMovements, setShowPutawayMovements] = useState(false); // Para mostrar/ocultar movimientos de ubicación
 
   // Helper: Formato Moneda Chilena
   const formatMoney = (amount) => {
     return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP' }).format(amount || 0);
+  };
+
+  // Helper: Traducir tipos de movimiento
+  const translateMovementType = (type) => {
+    const translations = {
+      'INBOUND': 'Recepción',
+      'OUTBOUND': 'Despacho', 
+      'TRANSFER_IN': 'Transferencia Entrada',
+      'TRANSFER_OUT': 'Transferencia Salida',
+      'PUTAWAY': 'Ubicación'
+    };
+    return translations[type] || type;
   };
 
   // 1. Cargar Datos
@@ -182,6 +195,7 @@ export default function InventoryViewer() {
               } else if (mov.type === 'OUTBOUND' || mov.type === 'TRANSFER_OUT') {
                   runningBalance -= quantity;
               }
+              // PUTAWAY no afecta el saldo total, es solo ubicación interna
               
               result.push({
                   ...mov,
@@ -195,6 +209,11 @@ export default function InventoryViewer() {
       
       if (selectedProduct) {
           filteredResult = filteredResult.filter(mov => mov.product_id === selectedProduct);
+      }
+
+      // Filtrar movimientos de ubicación si no se quieren mostrar
+      if (!showPutawayMovements) {
+          filteredResult = filteredResult.filter(mov => mov.type !== 'PUTAWAY');
       }
       
       return filteredResult;
@@ -252,7 +271,7 @@ export default function InventoryViewer() {
           headers = ["Fecha", "Tipo", "Bodega", "Código", "Producto", "Cantidad", "$ Movimiento", "Doc", "Saldo Acumulado"];
           dataToExport = kardexWithBalance.map(i => [
               new Date(i.created_at).toLocaleDateString(), 
-              i.type, i.warehouseName, i.productCode, i.productName, 
+              translateMovementType(i.type), i.warehouseName, i.productCode, i.productName, 
               (i.type === 'OUTBOUND' || i.type === 'TRANSFER_OUT' ? '-' : '+') + i.quantity, 
               i.historicalPrice,
               i.document_number || '',
@@ -311,9 +330,20 @@ export default function InventoryViewer() {
                   onChange={setSelectedWarehouse}
                   placeholder="-- Filtrar Bodega --"
               />
-              <button onClick={handleExport} className="flex items-center justify-center gap-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-black transition-colors">
-                  <Download size={18}/> Exportar Excel
-              </button>
+              <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+                      <input 
+                          type="checkbox" 
+                          checked={showPutawayMovements}
+                          onChange={e => setShowPutawayMovements(e.target.checked)}
+                          className="rounded border-slate-300"
+                      />
+                      Mostrar Ubicaciones
+                  </label>
+                  <button onClick={handleExport} className="flex items-center justify-center gap-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-black transition-colors px-3 py-2">
+                      <Download size={16}/> Exportar
+                  </button>
+              </div>
           </div>
       </div>
 
@@ -438,11 +468,11 @@ export default function InventoryViewer() {
               <div className="space-y-2">
                   {kardexWithBalance.map(mov => (
                       <div key={mov.id} className="bg-white p-4 rounded-xl border flex items-center gap-4 hover:bg-slate-50 transition-colors">
-                          <div className={`p-3 rounded-full ${mov.type === 'INBOUND' ? 'bg-emerald-100 text-emerald-600' : mov.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}>
-                              {mov.type === 'INBOUND' ? <ArrowDownCircle/> : mov.type === 'OUTBOUND' ? <ArrowUpCircle/> : <ArrowRightCircle/>}
+                          <div className={`p-3 rounded-full ${mov.type === 'INBOUND' ? 'bg-emerald-100 text-emerald-600' : mov.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-600' : mov.type === 'PUTAWAY' ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
+                              {mov.type === 'INBOUND' ? <ArrowDownCircle/> : mov.type === 'OUTBOUND' ? <ArrowUpCircle/> : mov.type === 'PUTAWAY' ? <MapPin/> : <ArrowRightCircle/>}
                           </div>
                           <div className="flex-1">
-                              <div className="text-xs text-slate-400">{new Date(mov.created_at).toLocaleString()} • {mov.type}</div>
+                              <div className="text-xs text-slate-400">{new Date(mov.created_at).toLocaleString()} • {translateMovementType(mov.type)}</div>
                               <div className="font-bold text-slate-800">{mov.productName}</div>
                               <div className="text-xs text-slate-500 flex gap-2">
                                   <span>Doc: {mov.document_number || 'S/N'}</span>
