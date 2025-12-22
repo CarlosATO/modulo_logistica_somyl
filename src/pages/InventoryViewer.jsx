@@ -21,6 +21,7 @@ export default function InventoryViewer() {
   const [selectedWarehouse, setSelectedWarehouse] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [selectedProduct, setSelectedProduct] = useState(null); // Para filtrar Kardex por producto
 
   // Helper: Formato Moneda Chilena
   const formatMoney = (amount) => {
@@ -154,6 +155,77 @@ export default function InventoryViewer() {
       });
   }, [movements, products, warehouses, selectedWarehouse, searchTerm, dateRange]);
 
+  // --- LÓGICA KARDEX CON SALDO ACUMULADO ---
+  const kardexWithBalance = useMemo(() => {
+      // Agrupar movimientos por producto para calcular saldos individuales
+      const productMovements = {};
+      
+      filteredMovements.forEach(mov => {
+          if (!mov.product_id) return;
+          
+          if (!productMovements[mov.product_id]) {
+              productMovements[mov.product_id] = [];
+          }
+          productMovements[mov.product_id].push(mov);
+      });
+
+      // Para cada producto, calcular saldo acumulado (orden cronológico inverso)
+      const result = [];
+      Object.keys(productMovements).forEach(productId => {
+          const movs = productMovements[productId].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // Más reciente primero
+          let runningBalance = 0;
+          
+          movs.forEach(mov => {
+              const quantity = Number(mov.quantity);
+              if (mov.type === 'INBOUND' || mov.type === 'TRANSFER_IN') {
+                  runningBalance += quantity;
+              } else if (mov.type === 'OUTBOUND' || mov.type === 'TRANSFER_OUT') {
+                  runningBalance -= quantity;
+              }
+              
+              result.push({
+                  ...mov,
+                  balance: runningBalance
+              });
+          });
+      });
+      
+      // Filtrar por producto seleccionado si existe
+      let filteredResult = result.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      
+      if (selectedProduct) {
+          filteredResult = filteredResult.filter(mov => mov.product_id === selectedProduct);
+      }
+      
+      return filteredResult;
+  }, [filteredMovements, selectedProduct]);
+
+  // --- CALCULAR TOTALES POR PRODUCTO ---
+  const productTotals = useMemo(() => {
+      const totals = {};
+      
+      kardexWithBalance.forEach(mov => {
+          if (!mov.product_id) return;
+          
+          const key = `${mov.product_id}_${mov.warehouse_id}`;
+          if (!totals[key]) {
+              totals[key] = {
+                  productId: mov.product_id,
+                  warehouseId: mov.warehouse_id,
+                  productName: mov.productName,
+                  productCode: mov.productCode,
+                  warehouseName: mov.warehouseName,
+                  totalBalance: 0
+              };
+          }
+          
+          // El último movimiento de cada producto tendrá el saldo actual
+          totals[key].totalBalance = mov.balance;
+      });
+      
+      return Object.values(totals);
+  }, [kardexWithBalance]);
+
   // --- CALCULAR TOTAL VALORIZADO (HEADER) ---
   const grandTotal = useMemo(() => {
     if (activeTab === 'STOCK') {
@@ -177,13 +249,14 @@ export default function InventoryViewer() {
           headers = ["Bodega", "Ubicación", "Código", "Producto", "Cantidad", "$ Unitario", "$ Total"];
           dataToExport = stockByLocation.map(i => [i.warehouseName, i.locationCode, i.productCode, i.productName, i.quantity, i.unitPrice, i.totalValue]);
       } else {
-          headers = ["Fecha", "Tipo", "Bodega", "Código", "Producto", "Cantidad", "$ Movimiento", "Doc"];
-          dataToExport = filteredMovements.map(i => [
+          headers = ["Fecha", "Tipo", "Bodega", "Código", "Producto", "Cantidad", "$ Movimiento", "Doc", "Saldo Acumulado"];
+          dataToExport = kardexWithBalance.map(i => [
               new Date(i.created_at).toLocaleDateString(), 
               i.type, i.warehouseName, i.productCode, i.productName, 
               (i.type === 'OUTBOUND' || i.type === 'TRANSFER_OUT' ? '-' : '+') + i.quantity, 
               i.historicalPrice,
-              i.document_number || ''
+              i.document_number || '',
+              i.balance
           ]);
       }
 
@@ -315,25 +388,83 @@ export default function InventoryViewer() {
 
       {/* VISTA 3: KARDEX (HISTORIAL) */}
       {!loading && activeTab === 'KARDEX' && (
-          <div className="space-y-3">
-              {filteredMovements.map(mov => (
-                  <div key={mov.id} className="bg-white p-4 rounded-xl border flex items-center gap-4">
-                      <div className={`p-3 rounded-full ${mov.type === 'INBOUND' ? 'bg-emerald-100 text-emerald-600' : mov.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}>
-                          {mov.type === 'INBOUND' ? <ArrowDownCircle/> : mov.type === 'OUTBOUND' ? <ArrowUpCircle/> : <ArrowRightCircle/>}
+          <div className="space-y-4">
+              {/* TOTALES POR PRODUCTO */}
+              {productTotals.length > 0 && (
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-xl border border-blue-200">
+                      <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-bold text-blue-800 flex items-center gap-2">
+                              <Wallet size={16} />
+                              Saldos Actuales por Producto
+                              {selectedProduct && (
+                                  <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
+                                    Filtrando: {productTotals.find(p => p.productId === selectedProduct)?.productName}
+                                  </span>
+                              )}
+                          </h3>
+                          {selectedProduct && (
+                              <button 
+                                  onClick={() => setSelectedProduct(null)}
+                                  className="text-xs bg-slate-500 text-white px-3 py-1 rounded-full hover:bg-slate-600 transition-colors"
+                              >
+                                  Ver Todos
+                              </button>
+                          )}
                       </div>
-                      <div className="flex-1">
-                          <div className="text-xs text-slate-400">{new Date(mov.created_at).toLocaleString()} • {mov.type}</div>
-                          <div className="font-bold text-slate-800">{mov.productName}</div>
-                          <div className="text-xs text-slate-500 flex gap-2">
-                              <span>Doc: {mov.document_number || 'S/N'}</span>
-                              <span className="text-emerald-600 font-bold flex items-center gap-1"><DollarSign size={10}/> {formatMoney(mov.historicalPrice)}</span>
-                          </div>
-                      </div>
-                      <div className="text-right font-black text-lg">
-                          {mov.type === 'OUTBOUND' || mov.type === 'TRANSFER_OUT' ? '-' : '+'}{mov.quantity}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {productTotals.map((total, idx) => (
+                              <div 
+                                  key={idx} 
+                                  onClick={() => setSelectedProduct(total.productId)}
+                                  className={`bg-white p-3 rounded-lg border shadow-sm cursor-pointer transition-all hover:shadow-md ${
+                                      selectedProduct === total.productId 
+                                        ? 'border-blue-400 bg-blue-50 ring-2 ring-blue-200' 
+                                        : 'border-blue-100 hover:border-blue-300'
+                                  }`}
+                              >
+                                  <div className="text-xs text-slate-500 font-medium">{total.warehouseName}</div>
+                                  <div className="font-bold text-slate-800 text-sm">{total.productName}</div>
+                                  <div className="text-xs text-slate-400 font-mono">{total.productCode}</div>
+                                  <div className="text-lg font-black text-blue-600 mt-1">
+                                      Stock: {total.totalBalance}
+                                  </div>
+                              </div>
+                          ))}
                       </div>
                   </div>
-              ))}
+              )}
+
+              {/* HISTORIAL DE MOVIMIENTOS CON SALDO */}
+              <div className="space-y-2">
+                  {kardexWithBalance.map(mov => (
+                      <div key={mov.id} className="bg-white p-4 rounded-xl border flex items-center gap-4 hover:bg-slate-50 transition-colors">
+                          <div className={`p-3 rounded-full ${mov.type === 'INBOUND' ? 'bg-emerald-100 text-emerald-600' : mov.type === 'OUTBOUND' ? 'bg-orange-100 text-orange-600' : 'bg-blue-100 text-blue-600'}`}>
+                              {mov.type === 'INBOUND' ? <ArrowDownCircle/> : mov.type === 'OUTBOUND' ? <ArrowUpCircle/> : <ArrowRightCircle/>}
+                          </div>
+                          <div className="flex-1">
+                              <div className="text-xs text-slate-400">{new Date(mov.created_at).toLocaleString()} • {mov.type}</div>
+                              <div className="font-bold text-slate-800">{mov.productName}</div>
+                              <div className="text-xs text-slate-500 flex gap-2">
+                                  <span>Doc: {mov.document_number || 'S/N'}</span>
+                                  <span className="text-emerald-600 font-bold flex items-center gap-1"><DollarSign size={10}/> {formatMoney(mov.historicalPrice)}</span>
+                              </div>
+                          </div>
+                          <div className="text-right">
+                              <div className="font-black text-lg text-slate-700 flex items-center gap-2">
+                                  <span>{mov.type === 'OUTBOUND' || mov.type === 'TRANSFER_OUT' ? '-' : '+'}{mov.quantity}</span>
+                                  <span className="text-xs text-slate-500 font-medium">
+                                      (Saldo: <span className={`font-bold ${mov.balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>{mov.balance}</span>)
+                                  </span>
+                              </div>
+                          </div>
+                      </div>
+                  ))}
+                  {kardexWithBalance.length === 0 && (
+                      <div className="bg-white p-8 rounded-xl border text-center text-slate-400">
+                          No hay movimientos que coincidan con los filtros.
+                      </div>
+                  )}
+              </div>
           </div>
       )}
     </div>
