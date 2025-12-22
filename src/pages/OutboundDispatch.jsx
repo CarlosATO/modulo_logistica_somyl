@@ -207,64 +207,57 @@ export default function OutboundDispatch() {
 
     setIsProcessing(true);
 
-    const promise = new Promise(async (resolve, reject) => {
-        try {
-            const folio = `SAL-${Date.now().toString().slice(-6)}`;
+    try {
+        const folio = `SAL-${Date.now().toString().slice(-6)}`;
 
-            // Preparamos los items para el RPC
-            const itemsToProcess = cart.map(item => ({
-                productId: item.productId,
-                quantity: item.quantity,
-                isRack: item.isRack,
-                sourceId: String(item.sourceId),
-                name: item.name,
-                code: item.code,
-                locationName: item.locationName
-            }));
+        // Preparamos los items para el RPC
+        const itemsToProcess = cart.map(item => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            isRack: item.isRack,
+            sourceId: String(item.sourceId),
+            name: item.name,
+            code: item.code,
+            locationName: item.locationName
+        }));
 
-            // Llamada única al servidor (Atómica)
-            const { error: rpcError } = await supabase.rpc('dispatch_materials', {
-                p_warehouse_id: selectedWarehouse,
-                p_project_id: Number(selectedProject),
-                p_document_number: folio,
-                p_receiver_name: receiver.name,
-                p_user_email: user?.email,
-                p_items: itemsToProcess,
-                p_receiver_rut: receiver.rut || '',
-                p_receiver_stage: receiver.stage || ''
-            });
+        // Llamada única al servidor (Atómica)
+        const { error: rpcError } = await supabase.rpc('dispatch_materials', {
+            p_warehouse_id: selectedWarehouse,
+            p_project_id: Number(selectedProject),
+            p_document_number: folio,
+            p_receiver_name: receiver.name,
+            p_user_email: user?.email,
+            p_items: itemsToProcess,
+            p_receiver_rut: receiver.rut || '',
+            p_receiver_stage: receiver.stage || ''
+        });
 
-            if (rpcError) throw rpcError;
+        if (rpcError) throw rpcError;
 
-            // Preparar datos para el PDF (se mantiene igual)
-            const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
-            const prj = projects.find(p => p.id === Number(selectedProject));
-            
-            setLastDispatchData({
-                id: folio, folio, warehouseName: whName,
-                projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
-                stage: receiver.stage,
-                receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
-                items: cart
-            });
+        // Preparar datos para el PDF (se mantiene igual)
+        const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
+        const prj = projects.find(p => p.id === Number(selectedProject));
+        
+        setLastDispatchData({
+            id: folio, folio, warehouseName: whName,
+            projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
+            stage: receiver.stage,
+            receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
+            items: cart
+        });
 
-            setCart([]);
-            setReceiver({ name: '', rut: '', plate: '', stage: '' });
-            resolve(`Salida ${folio} registrada exitosamente`);
+        setCart([]);
+        setReceiver({ name: '', rut: '', plate: '', stage: '' });
+        
+        toast.success(`✅ Salida ${folio} registrada exitosamente`);
 
-        } catch (err) {
-            console.error(err);
-            reject(err.message || "Error al procesar el despacho");
-        }
-    });
-
-    toast.promise(promise, {
-        loading: 'Procesando salida atómica...',
-        success: (msg) => `✅ ${msg}`,
-        error: (msg) => `❌ ${msg}`,
-    });
-    
-    setIsProcessing(false);
+    } catch (err) {
+        console.error(err);
+        toast.error(`❌ ${err.message || "Error al procesar el despacho"}`);
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   return (
