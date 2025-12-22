@@ -228,10 +228,10 @@ export default function OutboundDispatch() {
                 p_project_id: Number(selectedProject),
                 p_document_number: folio,
                 p_receiver_name: receiver.name,
-                p_receiver_rut: receiver.rut || '',
-                p_receiver_stage: receiver.stage || '',
                 p_user_email: user?.email,
-                p_items: itemsToProcess
+                p_items: itemsToProcess,
+                p_receiver_rut: receiver.rut || '',
+                p_receiver_stage: receiver.stage || ''
             });
 
             if (rpcError) throw rpcError;
