@@ -47,6 +47,7 @@ export default function InboundReception() {
   });
   const [receiptFile, setReceiptFile] = useState(null);
   const materialComboboxRef = useRef(null);
+  const quantityInputRef = useRef(null);
 
     // --- ESTADOS INGRESO DIRECTO ---
     const [products, setProducts] = useState([]);
@@ -128,6 +129,12 @@ export default function InboundReception() {
               quantity: '', 
               price: '0'
           });
+          // Auto-focus al input de cantidad
+          setTimeout(() => {
+              if (quantityInputRef.current) {
+                  quantityInputRef.current.focus();
+              }
+          }, 100);
       } else {
           setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '0' });
       }
@@ -394,6 +401,30 @@ export default function InboundReception() {
   };
 
   // ===== Helpers para INGRESO DIRECTO =====
+  const formatQuantity = (value) => {
+      if (!value) return '';
+      const num = parseFloat(value);
+      if (isNaN(num)) return '';
+      return num.toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const parseQuantity = (formattedValue) => {
+      if (!formattedValue) return '';
+      // Remover separadores de miles (puntos) y reemplazar coma decimal por punto
+      const cleanValue = formattedValue.replace(/\./g, '').replace(',', '.');
+      return cleanValue;
+  };
+
+  const copyDocumentNumberToClipboard = async (docNumber) => {
+      if (!docNumber) return;
+      try {
+          await navigator.clipboard.writeText(docNumber);
+          toast.info(`📋 Número ${docNumber} copiado al portapapeles`, { duration: 2000 });
+      } catch (err) {
+          console.error('Error copiando al portapapeles:', err);
+      }
+  };
+
   const handleFileChange = (e) => {
       const f = e?.target?.files?.[0];
       if (f) {
@@ -573,7 +604,9 @@ export default function InboundReception() {
                              <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">N° Guía / Factura *</label><input type="text" className="w-full px-3 py-2 border rounded-lg outline-none focus:border-blue-500 font-bold" onChange={(e) => setOcInputs(p => ({...p, global_doc: e.target.value}))}/></div>
                              <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adjuntar Respaldo</label>
-                                <label className={`flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed rounded-lg cursor-pointer transition-all ${
+                                <label 
+                                    onClick={() => copyDocumentNumberToClipboard(ocInputs['global_doc'])}
+                                    className={`flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed rounded-lg cursor-pointer transition-all ${
                                     receiptFile ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'hover:bg-slate-50 border-slate-300'
                                 }`}>
                                     {receiptFile ? <CheckCircle size={18} className="text-emerald-600"/> : <Paperclip size={18} className="text-slate-400"/>}
@@ -702,8 +735,8 @@ export default function InboundReception() {
                             label={`Material ${assignedForm.client_name ? '(' + assignedForm.client_name + ')' : ''}`}
                         />
                     </div>
-                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Código</label><input type="text" className="w-full p-2 rounded border border-purple-200 bg-slate-50 text-slate-500" placeholder="Auto" value={newItem.code} readOnly /></div>
-                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Cant.</label><input type="number" className="w-full p-2 rounded border border-purple-200 font-bold text-center" placeholder="0" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: e.target.value})} /></div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Código</label><input type="text" className="w-full p-2 rounded border border-purple-200 bg-slate-50 text-slate-500 cursor-not-allowed" placeholder="Auto" value={newItem.code} readOnly tabIndex="-1" /></div>
+                    <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Cant.</label><input ref={quantityInputRef} type="text" inputMode="decimal" className="w-full p-2 rounded border border-purple-200 font-bold text-center" placeholder="0,00" value={formatQuantity(newItem.quantity)} onChange={e => setNewItem({...newItem, quantity: parseQuantity(e.target.value)})} /></div>
                     <div className="col-span-2"><label className="text-[10px] font-bold text-green-700 uppercase">Precio ($)</label><input type="number" className="w-full p-2 rounded border border-green-200 font-bold text-green-800" placeholder="0" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} /></div>
                     <div className="col-span-2 flex items-end"><button onClick={addManualItem} className="w-full bg-purple-600 text-white p-2 rounded-lg font-bold hover:bg-purple-700 flex justify-center gap-1"><Plus size={18}/> Agregar</button></div>
                 </div>
@@ -715,15 +748,17 @@ export default function InboundReception() {
                         </thead>
                         <tbody className="divide-y">
                             {manualCart.map((item, idx) => (
-                                <tr key={idx}><td className="px-4 py-3 font-bold">{item.name} <span className="font-normal text-xs">({item.code})</span></td><td className="px-4 py-3 text-center">{item.quantity} {item.unit}</td><td className="px-4 py-3 text-right text-green-700">${item.price}</td><td className="px-4 py-3 text-right font-black">${(item.quantity*item.price).toLocaleString()}</td><td className="px-4 py-3 text-center"><button onClick={() => removeManualItem(idx)} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button></td></tr>
+                                <tr key={idx}><td className="px-4 py-3 font-bold">{item.name} <span className="font-normal text-xs">({item.code})</span></td><td className="px-4 py-3 text-center">{formatQuantity(item.quantity)} {item.unit}</td><td className="px-4 py-3 text-right text-green-700">${item.price}</td><td className="px-4 py-3 text-right font-black">${(parseFloat(item.quantity)*parseFloat(item.price)).toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td className="px-4 py-3 text-center"><button onClick={() => removeManualItem(idx)} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button></td></tr>
                             ))}
                             {manualCart.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">Carrito vacío</td></tr>}
                         </tbody>
-                        {manualCart.length > 0 && <tfoot className="bg-slate-50"><tr><td colSpan="3" className="px-4 py-3 text-right font-bold uppercase text-slate-500">Total:</td><td className="px-4 py-3 text-right font-black text-lg text-green-700">${manualCart.reduce((sum, i) => sum + (i.quantity * i.price), 0).toLocaleString()}</td><td></td></tr></tfoot>}
+                        {manualCart.length > 0 && <tfoot className="bg-slate-50"><tr><td colSpan="3" className="px-4 py-3 text-right font-bold uppercase text-slate-500">Total:</td><td className="px-4 py-3 text-right font-black text-lg text-green-700">${manualCart.reduce((sum, i) => sum + (parseFloat(i.quantity) * parseFloat(i.price)), 0).toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td></td></tr></tfoot>}
                     </table>
                     <div className="p-4 bg-slate-50 border-t flex justify-between items-center">
                         <div>
-                            <label className={`flex items-center gap-2 cursor-pointer border px-4 py-2 rounded-lg transition-all ${
+                            <label 
+                                onClick={() => copyDocumentNumberToClipboard(assignedForm.document_number)}
+                                className={`flex items-center gap-2 cursor-pointer border px-4 py-2 rounded-lg transition-all ${
                                 receiptFile ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-white hover:bg-slate-50 border-slate-300'
                             }`}>
                                 {receiptFile ? <CheckCircle size={18} className="text-emerald-600"/> : <UploadCloud size={18} className="text-purple-500"/>}
