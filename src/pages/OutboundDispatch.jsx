@@ -244,6 +244,29 @@ export default function OutboundDispatch() {
 
         if (rpcError) throw rpcError;
 
+        // Update general product stock for all dispatches
+        // Since RPC has issues updating products table, we handle it here
+        for (const item of cart) {
+            // Get current stock first
+            const { data: productData } = await supabase
+                .from('products')
+                .select('current_stock')
+                .eq('id', item.productId)
+                .single();
+            
+            if (productData) {
+                const newStock = Math.max(0, productData.current_stock - item.quantity);
+                const { error: stockError } = await supabase
+                    .from('products')
+                    .update({ current_stock: newStock })
+                    .eq('id', item.productId);
+                
+                if (stockError) {
+                    console.error('Error updating general stock:', stockError);
+                }
+            }
+        }
+
         // Preparar datos para el PDF (se mantiene igual)
         const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
         const prj = projects.find(p => p.id === Number(selectedProject));
