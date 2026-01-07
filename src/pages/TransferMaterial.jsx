@@ -4,7 +4,7 @@ import { supabaseProcurement } from '../services/procurementClient';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import Combobox from '../components/Combobox';
-import { PDFDownloadLink } from '@react-pdf/renderer'; 
+import { PDFDownloadLink, pdf } from '@react-pdf/renderer'; 
 import TransferPDF from '../components/TransferPDF'; 
 import { 
   ArrowRightLeft, Building2, UserCheck, Search, Trash2, 
@@ -299,6 +299,37 @@ export default function TransferMaterial() {
                 </div>
 
                 <div className="p-4 bg-slate-50 border-t flex flex-col gap-3">
+                    <div className="flex gap-2">
+                        <button onClick={async () => {
+                            if (cart.length === 0) return alert('Carrito vacío.');
+                            if (!formData.originWarehouse || !formData.destinationWarehouse) return alert('Selecciona origen y destino para la vista previa.');
+                            // Construir payload similar al que se guarda
+                            const originWhName = warehouses.find(w => w.id === formData.originWarehouse)?.name;
+                            const destWhName = warehouses.find(w => w.id === formData.destinationWarehouse)?.name;
+                            const originProjName = projects.find(p => p.id == formData.originProjectId)?.name || 'Sin Asignar';
+                            const destProjName = projects.find(p => p.id == formData.destinationProjectId)?.name || 'Sin Asignar';
+                            const previewData = {
+                                transfer_number: nextTransferId || 'BORRADOR',
+                                origin_wh_name: originWhName,
+                                dest_wh_name: destWhName,
+                                origin_project: originProjName,
+                                dest_project: destProjName,
+                                authorized_by: formData.authorizedBy,
+                                items: cart,
+                                currency: 'CLP'
+                            };
+                            try {
+                                const blob = await pdf(<TransferPDF data={previewData} />).toBlob();
+                                const url = URL.createObjectURL(blob);
+                                window.open(url, '_blank');
+                            } catch (err) {
+                                console.error('Error generando PDF preview', err);
+                                alert('Error generando vista previa del PDF');
+                            }
+                        }} className="w-full bg-amber-500 text-white py-3 rounded-xl font-bold hover:bg-amber-600 flex justify-center items-center gap-2">
+                            <FileText size={18}/> Vista Previa PDF
+                        </button>
+                    </div>
                     {lastTransferData && (
                         <PDFDownloadLink document={<TransferPDF data={lastTransferData}/>} fileName={`${lastTransferData.transfer_number}.pdf`}>
                             <button className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 flex justify-center items-center gap-2"><FileText size={18}/> Descargar Comprobante {lastTransferData.transfer_number}</button>

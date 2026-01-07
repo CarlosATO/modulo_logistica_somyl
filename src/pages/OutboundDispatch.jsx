@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { supabaseProcurement } from '../services/procurementClient';
+import { supabaseProcurement, getProveedores } from '../services/procurementClient';
 import { useAuth } from '../context/AuthContext';
 import { 
   Search, ArrowRight, Truck, User, FileText, 
-  MapPin, Package, X, CheckCircle, Loader, Briefcase, Plus, AlertCircle 
+  MapPin, Package, X, CheckCircle, Loader, Briefcase, Plus, AlertCircle, Users 
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
 import Combobox from '../components/Combobox';
@@ -27,6 +27,7 @@ const styles = StyleSheet.create({
   footer: { position: 'absolute', bottom: 30, left: 40, right: 40, textAlign: 'center', color: '#aaa', fontSize: 8, borderTop: 1, borderColor: '#eee', paddingTop: 10 }
 });
 
+// --- DOCUMENTO PDF ---
 const DispatchDocument = ({ data }) => (
   <Document>
     <Page size="A4" style={styles.page}>
@@ -36,16 +37,26 @@ const DispatchDocument = ({ data }) => (
       </View>
       <View style={{ flexDirection: 'row', gap: 10 }}>
           <View style={[styles.section, { flex: 1 }]}><Text style={styles.label}>Origen</Text><Text style={styles.value}>{data.warehouseName}</Text></View>
-          <View style={[styles.section, { flex: 1 }]}><Text style={styles.label}>Destino / Proyecto</Text><Text style={styles.value}>{data.projectName}</Text><Text style={{fontSize:9, marginTop:2}}>{data.stage}</Text></View>
+          <View style={[styles.section, { flex: 1 }]}>
+              <Text style={styles.label}>Destino / Proyecto</Text>
+              <Text style={styles.value}>{data.projectName}</Text>
+              <Text style={{fontSize:9, marginTop:2}}>{data.stage}</Text>
+              {/* MOSTRAR QUIÉN RECIBE SI ES SUBCONTRATO */}
+              {data.isSubcontract && (
+                  <Text style={{fontSize:9, marginTop:4, color:'#4f46e5', fontWeight:'bold'}}>
+                      ENTREGADO A: {data.providerName || 'CONTRATISTA'}
+                  </Text>
+              )}
+          </View>
       </View>
-      <View style={styles.section}><Text style={styles.label}>Receptor</Text><Text style={styles.value}>{data.receiverName} | RUT: {data.receiverRut}</Text></View>
+      <View style={styles.section}><Text style={styles.label}>Receptor (Firma)</Text><Text style={styles.value}>{data.receiverName} | RUT: {data.receiverRut}</Text></View>
       <View style={styles.table}>
         <View style={styles.tableHeader}><Text style={styles.col1}>COD</Text><Text style={styles.col2}>DESC</Text><Text style={styles.col3}>UBICACIÓN</Text><Text style={styles.col4}>CANT</Text></View>
         {data.items.map((item, i) => (
             <View key={i} style={styles.tableRow}><Text style={styles.col1}>{item.code}</Text><Text style={styles.col2}>{item.name}</Text><Text style={styles.col3}>{item.locationName}</Text><Text style={styles.col4}>{item.quantity}</Text></View>
         ))}
       </View>
-      <Text style={styles.footer}>Sistema Somyl - {data.id}</Text>
+      <Text style={styles.footer}>Sistema Somyl - {data.id} - {data.isSubcontract ? 'Cargo a Subcontrato' : 'Consumo Interno'}</Text>
     </Page>
   </Document>
 );
@@ -57,12 +68,19 @@ export default function OutboundDispatch() {
   const [warehouses, setWarehouses] = useState([]);
   const [projects, setProjects] = useState([]);
   const [assignedMaterials, setAssignedMaterials] = useState([]); 
+  
+  // Proveedores (Subcontratos)
+  const [providers, setProviders] = useState([]);
 
   // Cabecera
   const [selectedWarehouse, setSelectedWarehouse] = useState('');
   const [selectedProject, setSelectedProject] = useState(''); 
   const [projectClient, setProjectClient] = useState(''); 
   const [receiver, setReceiver] = useState({ name: '', rut: '', plate: '', stage: '' }); 
+
+  // Switch Subcontrato
+  const [isSubcontract, setIsSubcontract] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState('');
 
   // Picking
   const [searchResults, setSearchResults] = useState([]);
@@ -90,6 +108,10 @@ export default function OutboundDispatch() {
 
         const { data: asm } = await supabase.from('assigned_materials').select('code, client_name');
         setAssignedMaterials(asm || []);
+
+        // Cargar Proveedores (Solo Subcontratos = true)
+        const provs = await getProveedores(true);
+        setProviders(provs || []);
     };
     init();
   }, []);
@@ -108,7 +130,7 @@ export default function OutboundDispatch() {
     if (cart.length === 0) setPdfDownloaded(false);
   }, [cart]);
 
-  // 2. Buscar Producto (MEJORADO: Filtro por Bodega y Existencia Física)
+  // 2. Buscar Producto
   const handleSearch = async (term) => {
     if (!term || term.trim().length === 0) {
         setSearchResults([]);
@@ -180,7 +202,7 @@ export default function OutboundDispatch() {
       return;
     }
 
-    // Convertimos a formato de opciones para el modal (Solo Racks reales)
+    // Convertimos a formato de opciones para el modal
     const options = rackStock.map(r => ({ 
         id: r.id, 
         name: r.locations?.full_code || 'UBICACIÓN SIN NOMBRE', 
@@ -225,10 +247,11 @@ export default function OutboundDispatch() {
       setSearchResults(searchResults.filter(prod => prod.id !== pickingProduct.id));
   };
 
-  // 5. Procesar Despacho
+  // 5. Procesar Despacho (FUNCIÓN CORREGIDA)
   const handleDispatch = async () => {
     if (!selectedWarehouse) return toast.error("⚠️ Selecciona la Bodega de Origen.");
     if (!selectedProject) return toast.error("⚠️ Selecciona el Proyecto de Destino.");
+    if (isSubcontract && !selectedProvider) return toast.error("⚠️ Selecciona el Subcontrato/Cuadrilla.");
     if (!receiver.name) return toast.error("⚠️ Falta el nombre del Receptor.");
     if (cart.length === 0) return toast.warning("⚠️ El carrito está vacío.");
 
@@ -247,15 +270,19 @@ export default function OutboundDispatch() {
             locationName: item.locationName
         }));
 
-        const { error: rpcError } = await supabase.rpc('dispatch_materials', {
+        // --- CORRECCIÓN CRÍTICA AQUÍ ---
+        // Usamos la función v2 y convertimos a String los campos de texto
+        const { error: rpcError } = await supabase.rpc('dispatch_materials_v2', {
             p_warehouse_id: selectedWarehouse,
-            p_project_id: Number(selectedProject),
+            p_project_id: String(selectedProject), // <-- IMPORTANTE: String
             p_document_number: folio,
             p_receiver_name: receiver.name,
             p_user_email: user?.email,
             p_items: itemsToProcess,
             p_receiver_rut: receiver.rut || '',
-            p_receiver_stage: receiver.stage || ''
+            p_receiver_stage: receiver.stage || '',
+            p_is_subcontract: isSubcontract,
+            p_provider_id: selectedProvider ? String(selectedProvider) : null // <-- IMPORTANTE: String
         });
 
         if (rpcError) throw rpcError;
@@ -276,18 +303,23 @@ export default function OutboundDispatch() {
 
         const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
         const prj = projects.find(p => p.id === Number(selectedProject));
+        const providerName = isSubcontract ? providers.find(p => p.id === Number(selectedProvider))?.nombre : null;
         
         setLastDispatchData({
             id: folio, folio, warehouseName: whName,
             projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
             stage: receiver.stage,
             receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
-            items: cart
+            items: cart,
+            isSubcontract, 
+            providerName   
         });
 
         setCart([]);
         setReceiver({ name: '', rut: '', plate: '', stage: '' });
         setPdfDownloaded(false);
+        setIsSubcontract(false);
+        setSelectedProvider('');
         toast.success(`✅ Despacho ${folio} completado con éxito.`);
 
     } catch (err) {
@@ -302,13 +334,17 @@ export default function OutboundDispatch() {
 
   // Preview Data
   const selectedProj = projects.find(p => p.id === Number(selectedProject));
+  const providerNamePreview = isSubcontract ? providers.find(p => p.id === Number(selectedProvider))?.nombre : null;
+
   const pdfPreviewData = {
     id: 'PREVIEW', folio: 'PREVIEW',
     warehouseName: warehouses.find(w => w.id === selectedWarehouse)?.name || '',
     projectName: selectedProj ? `${selectedProj.proyecto} (${selectedProj.cliente})` : 'Cargando...',
     stage: receiver.stage,
     receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
-    items: cart
+    items: cart,
+    isSubcontract,
+    providerName: providerNamePreview
   };
 
   return (
@@ -335,7 +371,41 @@ export default function OutboundDispatch() {
           </div>
       </div>
 
-      {/* 2. DATOS DEL RECEPTOR */}
+      {/* 2. SUBCONTRATO */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border">
+          <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2"><Users size={18}/> Asignación a Subcontrato</h3>
+              
+              {/* SWITCH SUBCONTRATO */}
+              <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border">
+                  <span className={`text-xs font-bold ${!isSubcontract ? 'text-slate-600' : 'text-slate-400'}`}>Directo</span>
+                  <div 
+                      onClick={() => { setIsSubcontract(!isSubcontract); setSelectedProvider(''); }}
+                      className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${isSubcontract ? 'bg-indigo-600' : 'bg-slate-300'}`}
+                  >
+                      <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${isSubcontract ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                  </div>
+                  <span className={`text-xs font-bold ${isSubcontract ? 'text-indigo-600' : 'text-slate-400'}`}>Subcontrato</span>
+              </div>
+          </div>
+
+          {isSubcontract && (
+              <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                  <label className="block text-xs font-bold text-indigo-600 uppercase mb-2">Seleccionar Cuadrilla / Empresa</label>
+                  <Combobox
+                      options={providers.map(p => ({ id: p.id, name: p.nombre, subtitle: p.rut }))}
+                      value={selectedProvider}
+                      onChange={setSelectedProvider}
+                      placeholder="-- Buscar Contratista --"
+                  />
+                  <div className="mt-2 text-xs text-slate-400 flex items-center gap-1">
+                      <AlertCircle size={12}/> El material se descontará del inventario y se cargará a la cuenta de este contratista.
+                  </div>
+              </div>
+          )}
+      </div>
+
+      {/* 3. DATOS DEL RECEPTOR */}
       <div className="bg-white p-6 rounded-xl shadow-sm border">
           <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><User size={18}/> Datos del Receptor y Lugar</h3>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -346,11 +416,10 @@ export default function OutboundDispatch() {
           </div>
       </div>
 
-      {/* 3. BÚSQUEDA Y CARRITO */}
+      {/* 4. BÚSQUEDA Y CARRITO */}
       {selectedWarehouse && selectedProject && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             
-            {/* Buscador lateral */}
             <div className="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border h-fit">
                 <div className="mb-6">
                     <GoogleSearchBar 
@@ -375,7 +444,6 @@ export default function OutboundDispatch() {
                 </div>
             </div>
 
-            {/* Carrito Picking */}
             <div className="lg:col-span-7 bg-slate-50 p-6 rounded-xl border flex flex-col min-h-[500px]">
                 <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2 uppercase tracking-wider"><Truck size={18}/> Artículos para Salida</h3>
                 
@@ -417,8 +485,8 @@ export default function OutboundDispatch() {
                         )}
                         <button
                             onClick={handleDispatch}
-                            disabled={isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name}
-                            className={`px-8 py-3 rounded-xl font-black shadow-lg flex items-center gap-2 transition-all ${ (isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105 active:scale-95' }`}
+                            disabled={isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name || (isSubcontract && !selectedProvider)}
+                            className={`px-8 py-3 rounded-xl font-black shadow-lg flex items-center gap-2 transition-all ${ (isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name || (isSubcontract && !selectedProvider)) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105 active:scale-95' }`}
                         >
                             {isProcessing ? <Loader className="animate-spin"/> : <><CheckCircle size={18}/> Confirmar Despacho</>}
                         </button>
@@ -428,7 +496,7 @@ export default function OutboundDispatch() {
         </div>
       )}
 
-      {/* 4. MODAL DE DISTRIBUCIÓN FÍSICA (PICKING) */}
+      {/* 5. MODAL PICKING */}
       {showPickModal && pickingProduct && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
