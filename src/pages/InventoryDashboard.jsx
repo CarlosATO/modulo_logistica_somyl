@@ -114,6 +114,14 @@ export default function InventoryDashboard() {
       icon: <FileBarChart size={32} />, 
       color: "bg-cyan-50 text-cyan-600 border-cyan-200" 
     },
+    // Acceso rápido a Módulo Construcción (externo)
+    { 
+      title: "Módulo Construcción", 
+      desc: "Gestión de obras y producción", 
+      externalUrl: import.meta.env.VITE_MODULO_CONSTRUCCION_URL || (import.meta.env.VITE_PORTAL_URL || 'http://localhost:5173'),
+      icon: <Settings size={32} />, 
+      color: "bg-amber-50 text-amber-700 border-amber-200"
+    }
   ];
 
   return (
@@ -140,7 +148,14 @@ export default function InventoryDashboard() {
         {modules.map((mod, idx) => (
           <button 
             key={idx}
-            onClick={() => navigate(mod.path)}
+            onClick={() => {
+              if (mod.externalUrl) {
+                // Open external module in a new tab
+                window.open(mod.externalUrl, '_blank')
+                return
+              }
+              navigate(mod.path)
+            }}
             className={`p-6 rounded-2xl border shadow-sm hover:shadow-md hover:-translate-y-1 transition-all text-left flex flex-col justify-between h-40 group bg-white ${mod.color.replace('bg-', 'hover:bg-opacity-80 ')}`}
           >
             <div className={`p-3 rounded-xl w-fit ${mod.color}`}>
