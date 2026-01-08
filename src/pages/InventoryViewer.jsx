@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
+import { supabaseProcurement } from '../services/procurementClient'; // <--- Importante
 import Combobox from '../components/Combobox';
 import { 
-  Search, ArrowUpCircle, ArrowDownCircle, ArrowRightCircle, 
-  Layers, History, Loader, MapPin, Download, Grid, Wallet, X, ArrowRight, DollarSign
+  Search, ArrowUpCircle, ArrowDownCircle, Layers, History, 
+  Loader, MapPin, Download, Grid, Wallet, X, ArrowRight, Briefcase
 } from 'lucide-react';
 
 export default function InventoryViewer() {
@@ -16,9 +17,13 @@ export default function InventoryViewer() {
   const [movements, setMovements] = useState([]);
   const [locations, setLocations] = useState([]);
   const [stockInRacks, setStockInRacks] = useState([]);
+  
+  // Nuevo: Lista de Proyectos
+  const [projectsList, setProjectsList] = useState([]);
 
   // Filtros
   const [selectedWarehouse, setSelectedWarehouse] = useState('ALL');
+  const [selectedProject, setSelectedProject] = useState('ALL'); // <--- Nuevo Estado Filtro Proyecto
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showPutawayMovements, setShowPutawayMovements] = useState(false);
@@ -39,6 +44,7 @@ export default function InventoryViewer() {
     const fetchData = async () => {
         setLoading(true);
         try {
+            // 1. Carga de datos locales (Supabase Logística)
             const { data: wh } = await supabase.from('warehouses').select('*');
             setWarehouses(wh || []);
             const { data: prod } = await supabase.from('products').select('*');
@@ -49,6 +55,15 @@ export default function InventoryViewer() {
             setMovements(mov || []);
             const { data: rackStock } = await supabase.from('product_locations').select('*');
             setStockInRacks(rackStock || []);
+
+            // 2. Carga de Proyectos (Supabase Adquisiciones)
+            const { data: projs } = await supabaseProcurement
+                .from('proyectos')
+                .select('id, proyecto, cliente')
+                .eq('activo', true)
+                .order('proyecto', { ascending: true });
+            setProjectsList(projs || []);
+
         } catch (error) {
             console.error("Error cargando inventario:", error);
         } finally {
@@ -67,39 +82,70 @@ export default function InventoryViewer() {
         .slice(0, 6);
   }, [searchTerm, products, selectedProduct]);
 
-  // --- LÓGICA 1: STOCK GLOBAL ---
+  // --- LÓGICA 1: STOCK GLOBAL (FILTRADO POR PROYECTO) ---
   const stockByWarehouse = useMemo(() => {
     const stockMap = {};
+    
+    // Obtenemos datos del proyecto seleccionado para filtrado híbrido (ID o Nombre)
+    const targetProject = selectedProject !== 'ALL' 
+        ? projectsList.find(p => String(p.id) === String(selectedProject)) 
+        : null;
+
     movements.forEach(m => {
+        // 1. Filtro de Bodega
         if (selectedWarehouse !== 'ALL' && m.warehouse_id !== selectedWarehouse) return;
+        
+        // 2. Filtro de Proyecto (NUEVO)
+        // Nota: Filtramos movimientos que coincidan con el ID del proyecto O con su Nombre (para compatibilidad histórica)
+        if (selectedProject !== 'ALL' && targetProject) {
+            const movProj = String(m.project_id || '').trim();
+            const matchId = movProj === String(targetProject.id);
+            const matchName = movProj === String(targetProject.proyecto);
+            
+            if (!matchId && !matchName) return; // Si no coincide ni ID ni Nombre, ignorar movimiento
+        }
+
         if (!m.product_id) return;
+
         const key = `${m.product_id}_${m.warehouse_id}`;
         if (!stockMap[key]) stockMap[key] = { productId: m.product_id, warehouseId: m.warehouse_id, inbound: 0, outbound: 0 };
+        
         const qty = Number(m.quantity);
         if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') stockMap[key].inbound += qty;
         if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') stockMap[key].outbound += qty;
     });
+
     return Object.values(stockMap).map(item => {
         const prod = products.find(p => p.id === item.productId);
         const wh = warehouses.find(w => w.id === item.warehouseId);
         const currentStock = item.inbound - item.outbound;
         const price = Number(prod?.price || 0);
+        
         return {
-            ...item, code: prod?.code || '???', name: prod?.name || 'Desconocido',
-            warehouseName: wh?.name || 'Desconocida', currentStock,
-            unitPrice: price, totalValue: currentStock * price
+            ...item, 
+            code: prod?.code || '???', 
+            name: prod?.name || 'Desconocido',
+            warehouseName: wh?.name || 'Desconocida', 
+            currentStock,
+            unitPrice: price, 
+            totalValue: currentStock * price
         };
-    }).filter(item => item.currentStock > 0 && 
+    }).filter(item => 
+        item.currentStock !== 0 && // Mostrar negativos o positivos, pero no ceros exactos
         ((item.name || '').toLowerCase().includes(searchTerm.toLowerCase()) || (item.code || '').toLowerCase().includes(searchTerm.toLowerCase()))
     );
-  }, [movements, products, warehouses, selectedWarehouse, searchTerm]);
+  }, [movements, products, warehouses, selectedWarehouse, searchTerm, selectedProject, projectsList]);
 
-  // --- LÓGICA 2: POR UBICACIÓN ---
+  // --- LÓGICA 2: POR UBICACIÓN (Físico) ---
+  // Nota: Las ubicaciones físicas NO suelen tener "Proyecto" pegado (son fungibles). 
+  // Esta vista muestra dónde está el material físicamente, independiente de quién sea el dueño contable.
   const stockByLocation = useMemo(() => {
     return stockInRacks.filter(item => {
         const matchWh = selectedWarehouse === 'ALL' || item.warehouse_id === selectedWarehouse;
         if (!matchWh) return false;
+        
         if (selectedProduct) return String(item.product_id) === String(selectedProduct);
+        
         const prod = products.find(p => p.id === item.product_id);
         const term = searchTerm.toLowerCase();
         return !searchTerm || (prod?.name || '').toLowerCase().includes(term) || (prod?.code || '').toLowerCase().includes(term);
@@ -116,38 +162,61 @@ export default function InventoryViewer() {
     });
   }, [stockInRacks, products, warehouses, locations, selectedWarehouse, searchTerm, selectedProduct]);
 
-  // --- LÓGICA 3: KÁRDEX ---
+  // --- LÓGICA 3: KÁRDEX (FILTRADO POR PROYECTO) ---
   const kardexWithBalance = useMemo(() => {
       if (!selectedProduct) return []; 
-      const productMovements = movements.filter(m => String(m.product_id) === String(selectedProduct));
-      const whFiltered = selectedWarehouse === 'ALL' ? productMovements : productMovements.filter(m => m.warehouse_id === selectedWarehouse);
-      const sorted = [...whFiltered].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      
+      let productMovements = movements.filter(m => String(m.product_id) === String(selectedProduct));
+      
+      // Filtro Bodega
+      if (selectedWarehouse !== 'ALL') {
+        productMovements = productMovements.filter(m => m.warehouse_id === selectedWarehouse);
+      }
+
+      // Filtro Proyecto (Igual lógica híbrida que arriba)
+      if (selectedProject !== 'ALL') {
+          const targetProject = projectsList.find(p => String(p.id) === String(selectedProject));
+          if (targetProject) {
+              productMovements = productMovements.filter(m => {
+                  const movProj = String(m.project_id || '').trim();
+                  return movProj === String(targetProject.id) || movProj === String(targetProject.proyecto);
+              });
+          }
+      }
+
+      const sorted = [...productMovements].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
       let runningBalance = 0;
+      
       return sorted.map(mov => {
           const qty = Number(mov.quantity);
           if (mov.type === 'INBOUND' || mov.type === 'TRANSFER_IN') runningBalance += qty;
           else if (mov.type === 'OUTBOUND' || mov.type === 'TRANSFER_OUT') runningBalance -= qty;
           return { ...mov, balance: runningBalance };
       }).filter(m => showPutawayMovements || m.type !== 'PUTAWAY')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  }, [movements, selectedProduct, selectedWarehouse, showPutawayMovements]);
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // Orden inverso para visualización
+  }, [movements, selectedProduct, selectedWarehouse, showPutawayMovements, selectedProject, projectsList]);
 
-  // Info del Banner (Compartida)
+  // Info del Banner
   const selectedProductInfo = useMemo(() => {
       if (!selectedProduct) return null;
       const prod = products.find(p => String(p.id) === String(selectedProduct));
-      const kardexStock = kardexWithBalance[0]?.balance || 0;
+      // El stock de Kardex es el "Stock del Proyecto" si el filtro está activo
+      const kardexStock = kardexWithBalance.length > 0 ? kardexWithBalance[0].balance : 0; 
+      
+      // El stock de Racks siempre es el físico total (la bodega no sabe de dueños en sus estantes)
       const rackStock = stockByLocation.reduce((sum, i) => sum + i.quantity, 0);
+      
       return {
           name: prod?.name, code: prod?.code,
           stockKardex: kardexStock, stockRack: rackStock,
-          totalValue: rackStock * Number(prod?.price || 0)
+          totalValue: kardexStock * Number(prod?.price || 0) // Valorizamos lo que es del proyecto
       };
   }, [selectedProduct, products, kardexWithBalance, stockByLocation]);
 
   const grandTotal = useMemo(() => {
     if (activeTab === 'STOCK') return stockByWarehouse.reduce((sum, i) => sum + i.totalValue, 0);
-    if (activeTab === 'LOCATIONS') return stockByLocation.reduce((sum, i) => sum + i.totalValue, 0);
+    // En ubicación no filtramos valor por proyecto porque es físico
+    if (activeTab === 'LOCATIONS') return stockByLocation.reduce((sum, i) => sum + i.totalValue, 0); 
     return 0;
   }, [activeTab, stockByWarehouse, stockByLocation]);
 
@@ -164,7 +233,9 @@ export default function InventoryViewer() {
                   <div className="bg-emerald-50 border border-emerald-100 px-6 py-2 rounded-xl flex items-center gap-4">
                       <div className="p-2 bg-emerald-100 text-emerald-600 rounded-full"><Wallet size={20}/></div>
                       <div>
-                          <p className="text-xs font-bold text-emerald-600 uppercase">Valorización Total</p>
+                          <p className="text-xs font-bold text-emerald-600 uppercase">
+                              {selectedProject !== 'ALL' ? 'Valor Proyecto' : 'Valorización Total'}
+                          </p>
                           <p className="text-xl font-black text-emerald-800">{formatMoney(grandTotal)}</p>
                       </div>
                   </div>
@@ -175,8 +246,11 @@ export default function InventoryViewer() {
                   <button onClick={() => setActiveTab('KARDEX')} className={`px-3 py-2 rounded text-xs font-bold flex items-center gap-2 ${activeTab === 'KARDEX' ? 'bg-white shadow text-orange-600' : 'text-slate-500'}`}><History size={14}/> Kárdex</button>
               </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="md:col-span-2 relative">
+          
+          {/* BARRA DE FILTROS */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+              {/* Buscador de Producto */}
+              <div className="md:col-span-4 relative">
                   <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
                   <input type="text" placeholder="Buscar producto..." className="w-full pl-10 pr-4 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-blue-100" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                   {searchResults.length > 0 && (
@@ -190,8 +264,35 @@ export default function InventoryViewer() {
                     </div>
                   )}
               </div>
-              <Combobox options={[{ id: 'ALL', name: 'Todas las Bodegas' }, ...warehouses]} value={selectedWarehouse} onChange={setSelectedWarehouse} placeholder="-- Bodega --" />
-              <button className="flex items-center justify-center gap-2 bg-slate-800 text-white font-bold rounded-lg hover:bg-black transition-colors px-3 py-2"><Download size={16}/> Exportar</button>
+
+              {/* Filtro: PROYECTO (Nuevo) */}
+              <div className="md:col-span-4">
+                 <Combobox 
+                    options={[{ id: 'ALL', name: 'Todos los Proyectos' }, ...projectsList.map(p => ({ id: p.id, name: `${p.proyecto} (${p.cliente})` }))]} 
+                    value={selectedProject} 
+                    onChange={setSelectedProject} 
+                    placeholder="-- Filtrar por Proyecto --" 
+                    label="Proyecto / Cliente"
+                 />
+              </div>
+
+              {/* Filtro: BODEGA */}
+              <div className="md:col-span-3">
+                 <Combobox 
+                    options={[{ id: 'ALL', name: 'Todas las Bodegas' }, ...warehouses]} 
+                    value={selectedWarehouse} 
+                    onChange={setSelectedWarehouse} 
+                    placeholder="-- Bodega --" 
+                    label="Bodega Física"
+                 />
+              </div>
+
+              {/* Botón Exportar */}
+              <div className="md:col-span-1 flex items-end">
+                  <button className="w-full h-[42px] flex items-center justify-center bg-slate-800 text-white font-bold rounded-lg hover:bg-black transition-colors" title="Exportar vista actual">
+                    <Download size={18}/>
+                  </button>
+              </div>
           </div>
       </div>
 
@@ -208,15 +309,15 @@ export default function InventoryViewer() {
                   </div>
                   <div className="flex items-center gap-8">
                       <div className="text-right">
-                          <p className="text-[10px] font-bold text-slate-400 uppercase">Stock Contable</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">Stock {selectedProject !== 'ALL' ? 'Proyecto' : 'Global'}</p>
                           <p className="text-xl font-black text-indigo-600">{selectedProductInfo.stockKardex}</p>
                       </div>
                       <div className="text-right">
-                          <p className="text-[10px] font-bold text-purple-400 uppercase">Stock en Racks</p>
+                          <p className="text-[10px] font-bold text-purple-400 uppercase">Físico en Racks</p>
                           <p className="text-xl font-black text-purple-600">{selectedProductInfo.stockRack}</p>
                       </div>
                       <div className="text-right border-l pl-8">
-                          <p className="text-[10px] font-bold text-emerald-600 uppercase">Valor en Racks</p>
+                          <p className="text-[10px] font-bold text-emerald-600 uppercase">Valorización</p>
                           <p className="text-xl font-black text-emerald-700">{formatMoney(selectedProductInfo.totalValue)}</p>
                       </div>
                       <button onClick={() => setSelectedProduct(null)} className="p-2 hover:bg-slate-200 rounded-full text-slate-400 transition-colors"><X size={20}/></button>
@@ -231,7 +332,11 @@ export default function InventoryViewer() {
               <table className="w-full text-sm text-left">
                   <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
                       <tr>
-                          <th className="px-6 py-3">Bodega</th><th className="px-6 py-3">Producto</th><th className="px-6 py-3 text-center">Stock</th><th className="px-6 py-3 text-right bg-emerald-50 text-emerald-800">$ Total</th><th className="px-6 py-3 text-center">Acción</th>
+                          <th className="px-6 py-3">Bodega</th>
+                          <th className="px-6 py-3">Producto</th>
+                          <th className="px-6 py-3 text-center">Stock {selectedProject !== 'ALL' ? 'Proyecto' : 'Total'}</th>
+                          <th className="px-6 py-3 text-right bg-emerald-50 text-emerald-800">$ Total</th>
+                          <th className="px-6 py-3 text-center">Acción</th>
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -246,43 +351,54 @@ export default function InventoryViewer() {
                               </td>
                           </tr>
                       ))}
+                      {stockByWarehouse.length === 0 && (
+                          <tr><td colSpan="5" className="p-12 text-center text-slate-400 italic">No hay stock disponible con los filtros actuales.</td></tr>
+                      )}
                   </tbody>
               </table>
           </div>
       )}
 
-      {/* VISTA 2: UBICACIONES */}
+      {/* VISTA 2: UBICACIONES (Física) */}
       {!loading && activeTab === 'LOCATIONS' && (
-          <div className="bg-white rounded-xl shadow-sm border overflow-hidden animate-in fade-in">
-              <table className="w-full text-sm text-left">
-                  <thead className="bg-purple-50 text-purple-900 font-bold uppercase text-xs">
-                      <tr>
-                          <th className="px-6 py-3">Ubicación</th>
-                          {!selectedProduct && <th className="px-6 py-3">Producto</th>}
-                          <th className="px-6 py-3 text-center">Cantidad</th>
-                          <th className="px-6 py-3 text-right">$ Total</th>
-                          <th className="px-6 py-3 text-center">Acción</th>
-                      </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                      {stockByLocation.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                              <td className="px-6 py-3"><p className="font-black text-slate-700">{item.locationCode}</p><p className="text-[10px] text-slate-400 uppercase font-bold">{item.warehouseName}</p></td>
-                              {!selectedProduct && (
-                                  <td className="px-6 py-3"><p className="font-bold text-slate-700">{item.productName}</p><p className="text-[10px] text-slate-400 font-mono">{item.productCode}</p></td>
-                              )}
-                              <td className="px-6 py-3 text-center"><span className="bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-bold">{item.quantity}</span></td>
-                              <td className="px-6 py-3 text-right font-bold text-slate-700">{formatMoney(item.totalValue)}</td>
-                              <td className="px-6 py-3 text-center">
-                                  <button onClick={() => {setSelectedProduct(item.productId); setActiveTab('KARDEX');}} className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm"><History size={16}/></button>
-                              </td>
-                          </tr>
-                      ))}
-                      {stockByLocation.length === 0 && (
-                          <tr><td colSpan="5" className="p-16 text-center text-slate-400 italic"><Search size={40} className="mx-auto mb-4 opacity-10"/> No se encontraron ubicaciones para este artículo.</td></tr>
-                      )}
-                  </tbody>
-              </table>
+          <div className="space-y-4 animate-in fade-in">
+              {selectedProject !== 'ALL' && (
+                  <div className="bg-yellow-50 border border-yellow-200 p-3 rounded-lg flex items-center gap-2 text-yellow-800 text-sm">
+                      <Briefcase size={16}/>
+                      <span><strong>Nota:</strong> Esta vista muestra la ubicación física de <strong>todos</strong> los materiales en bodega, independiente del proyecto dueño.</span>
+                  </div>
+              )}
+              <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+                <table className="w-full text-sm text-left">
+                    <thead className="bg-purple-50 text-purple-900 font-bold uppercase text-xs">
+                        <tr>
+                            <th className="px-6 py-3">Ubicación</th>
+                            {!selectedProduct && <th className="px-6 py-3">Producto</th>}
+                            <th className="px-6 py-3 text-center">Cantidad</th>
+                            <th className="px-6 py-3 text-right">$ Total</th>
+                            <th className="px-6 py-3 text-center">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {stockByLocation.map((item, idx) => (
+                            <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-6 py-3"><p className="font-black text-slate-700">{item.locationCode}</p><p className="text-[10px] text-slate-400 uppercase font-bold">{item.warehouseName}</p></td>
+                                {!selectedProduct && (
+                                    <td className="px-6 py-3"><p className="font-bold text-slate-700">{item.productName}</p><p className="text-[10px] text-slate-400 font-mono">{item.productCode}</p></td>
+                                )}
+                                <td className="px-6 py-3 text-center"><span className="bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-bold">{item.quantity}</span></td>
+                                <td className="px-6 py-3 text-right font-bold text-slate-700">{formatMoney(item.totalValue)}</td>
+                                <td className="px-6 py-3 text-center">
+                                    <button onClick={() => {setSelectedProduct(item.productId); setActiveTab('KARDEX');}} className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-600 hover:text-white transition-all shadow-sm"><History size={16}/></button>
+                                </td>
+                            </tr>
+                        ))}
+                        {stockByLocation.length === 0 && (
+                            <tr><td colSpan="5" className="p-16 text-center text-slate-400 italic"><Search size={40} className="mx-auto mb-4 opacity-10"/> No se encontraron ubicaciones.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+              </div>
           </div>
       )}
 
@@ -299,14 +415,15 @@ export default function InventoryViewer() {
                               <div className="flex-1">
                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">{new Date(mov.created_at).toLocaleDateString()} • {translateMovementType(mov.type)}</p>
                                   <p className="text-sm font-bold text-slate-700">{mov.document_number || 'S/N'}</p>
+                                  {mov.project_id && <p className="text-[10px] text-indigo-500 font-bold mt-1">Ref. Proyecto: {mov.project_id}</p>}
                               </div>
                               <div className="text-right">
                                   <p className={`font-bold ${mov.type.includes('IN') || mov.type === 'INBOUND' ? 'text-emerald-600' : 'text-orange-600'}`}>{mov.type.includes('IN') || mov.type === 'INBOUND' ? '+' : '-'}{mov.quantity}</p>
-                                  <p className="text-[10px] font-medium text-slate-400 uppercase">Saldo: <span className="text-indigo-600 font-bold">{mov.balance}</span></p>
+                                  <p className="text-[10px] font-medium text-slate-400 uppercase">Saldo {selectedProject !== 'ALL' ? 'Proy' : ''}: <span className="text-indigo-600 font-bold">{mov.balance}</span></p>
                               </div>
                           </div>
                       ))}
-                      {kardexWithBalance.length === 0 && <div className="p-16 text-center text-slate-400 italic">No hay historial para mostrar.</div>}
+                      {kardexWithBalance.length === 0 && <div className="p-16 text-center text-slate-400 italic">No hay historial para mostrar con los filtros seleccionados.</div>}
                   </div>
               ) : (
                   <div className="p-20 text-center text-slate-400 italic"><Search size={48} className="mx-auto mb-4 opacity-10"/> Selecciona un artículo para ver su Kárdex.</div>
