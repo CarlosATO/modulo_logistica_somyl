@@ -32,6 +32,8 @@ export default function InboundReception() {
   const [ocHeader, setOcHeader] = useState(null);
   const [ocHistory, setOcHistory] = useState({});
   const [ocInputs, setOcInputs] = useState({});
+    // Proyecto asociado a la OC (se utiliza en la pestaña OC)
+    const [ocProject, setOcProject] = useState('');
 
   // --- ESTADOS ASIGNADOS (MANUAL) ---
   const [assignedForm, setAssignedForm] = useState({
@@ -221,6 +223,11 @@ export default function InboundReception() {
         toast.error("⚠️ Debes seleccionar una Bodega de Destino");
         return;
     }
+    // VALIDACIÓN: proyecto asignado
+    if (!ocProject) {
+        toast.error("⚠️ Debes asignar un Proyecto a esta recepción");
+        return;
+    }
     const mainDoc = ocInputs['global_doc'];
     if (!mainDoc) {
         toast.error("⚠️ Falta el N° de Guía o Factura");
@@ -256,11 +263,12 @@ export default function InboundReception() {
                 docUrl = fileName;
             }
 
-            // LLAMADA ATÓMICA AL RPC
+            // LLAMADA ATÓMICA AL RPC (incluye project_id)
             const { error: rpcError } = await supabase.rpc('receive_oc_items', {
                 p_warehouse_id: selectedWarehouse,
                 p_oc_number: String(ocNumber),
                 p_document_number: mainDoc,
+                p_project_id: ocProject,
                 p_doc_url: docUrl,
                 p_global_obs: ocInputs['global_obs'] || null,
                 p_user_email: user?.email,
@@ -275,6 +283,7 @@ export default function InboundReception() {
             setOcHeader(null);
             setOcInputs({});
             setReceiptFile(null);
+            setOcProject('');
             resolve("Recepción procesada correctamente en servidor");
 
         } catch (err) {
@@ -600,9 +609,25 @@ export default function InboundReception() {
                             <div><span className="block text-xs text-slate-400 font-bold uppercase">Total Líneas</span><div className="font-bold text-slate-700">{ocData.length} Ítems</div></div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-white p-4 rounded-lg border border-slate-200">
-                             <div><label className="block text-xs font-bold text-slate-500 uppercase mb-1">N° Guía / Factura *</label><input type="text" className="w-full px-3 py-2 border rounded-lg outline-none focus:border-blue-500 font-bold" onChange={(e) => setOcInputs(p => ({...p, global_doc: e.target.value}))}/></div>
-                             <div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-white p-4 rounded-lg border border-slate-200">
+                            <div>
+                                <Combobox
+                                    options={projectsDB.map(p => ({ id: p.proyecto, name: `${p.proyecto} (${p.cliente})` }))}
+                                    value={ocProject}
+                                    onChange={setOcProject}
+                                    placeholder="-- Seleccionar Proyecto --"
+                                    label="Asignar a Proyecto *"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">N° Guía / Factura *</label>
+                                <input 
+                                    type="text" 
+                                    className="w-full px-3 py-2 border rounded-lg outline-none focus:border-blue-500 font-bold" 
+                                    onChange={(e) => setOcInputs(p => ({...p, global_doc: e.target.value}))}
+                                />
+                            </div>
+                            <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adjuntar Respaldo</label>
                                 <label 
                                     onClick={() => copyDocumentNumberToClipboard(ocInputs['global_doc'])}
@@ -616,7 +641,7 @@ export default function InboundReception() {
                                     <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={handleFileChange}/>
                                 </label>
                                 {receiptFile && <p className="text-[10px] text-emerald-600 mt-1 font-medium truncate">{receiptFile.name}</p>}
-                             </div>
+                            </div>
                         </div>
 
                         <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white">

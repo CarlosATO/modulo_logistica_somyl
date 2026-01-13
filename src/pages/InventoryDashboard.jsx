@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { 
   Package, ArrowDownCircle, ArrowUpCircle, ClipboardList, 
   Settings, Truck, Warehouse, Box, Grid, Layers, ArrowRightLeft,
-  FileText, History, FileBarChart, ArrowLeft, PlayCircle, Database, LayoutDashboard
+  FileText, History, FileBarChart, ArrowLeft, PlayCircle, Database, LayoutDashboard,
+  AlertTriangle
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -45,6 +46,13 @@ export default function InventoryDashboard() {
       path: "/gestion/traspasos", 
       icon: <ArrowRightLeft size={28} />, 
       color: "text-purple-600 bg-purple-50 border-purple-100" 
+    },
+    { 
+      title: "Ajustes / Mermas", 
+      desc: "Corrección de Stock y Hallazgos", 
+      path: "/gestion/ajustes", 
+      icon: <AlertTriangle size={28} />, 
+      color: "text-red-600 bg-red-50 border-red-100" 
     },
   ];
 

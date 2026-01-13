@@ -19,6 +19,7 @@ import PutAway from './pages/PutAway';
 import LocationSettings from './pages/LocationSettings'; 
 import TransferMaterial from './pages/TransferMaterial'; 
 import DirectInboundList from './pages/DirectInboundList';
+import InventoryAdjustments from './pages/InventoryAdjustments';
 
 // --- REPORTES (Desde raíz src, según tu foto) ---
 import InventoryReport from './InventoryReport'; // ✅ Importado desde raíz src/
@@ -102,6 +103,7 @@ export default function App() {
             
             <Route path="traspasos" element={<TransferMaterial />} />
             <Route path="catalogo" element={<ProductList />} />
+            <Route path="ajustes" element={<InventoryAdjustments />} />
             <Route path="historial-ingresos" element={<DirectInboundList />} />
             
             {/* 3. Mantenedores */}
