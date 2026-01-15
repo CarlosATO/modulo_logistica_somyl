@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Search, Filter, Camera, Image as ImageIcon, Loader, LayoutGrid, 
-  List as ListIcon, X, Plus, Edit, Trash2, Save, Building, Users
+  List as ListIcon, X, Plus, Edit, Trash2, Save, Building, Users,
+  ChevronLeft, ChevronRight, ZoomIn
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
 import Combobox from '../components/Combobox';
@@ -18,7 +19,7 @@ export default function ProductList() {
   // --- ESTADOS DE FILTROS ---
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('ALL'); 
-  const [filterClient, setFilterClient] = useState('ALL'); // <--- NUEVO ESTADO PARA CLIENTE
+  const [filterClient, setFilterClient] = useState('ALL');
 
   const [viewMode, setViewMode] = useState('list');
   const [uploading, setUploading] = useState(null);
@@ -27,6 +28,13 @@ export default function ProductList() {
   const [showModal, setShowModal] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState(null);
   const [formData, setFormData] = useState({ code: '', description: '', unit: 'UN', client_name: '', category: '' });
+  
+  // Estados Galería Modal
+  const [modalImages, setModalImages] = useState([]);
+  const [modalImageIndex, setModalImageIndex] = useState(0);
+  
+  // Estado Lightbox (ver imagen grande)
+  const [lightboxImage, setLightboxImage] = useState(null);
 
   useEffect(() => {
     fetchCombinedData();
@@ -97,16 +105,28 @@ export default function ProductList() {
         unit: m.unit
       }));
 
-      // 3. FOTOS Y STOCK
+      // 3. FOTOS Y STOCK (ahora con images array)
       const { data: localData } = await supabase
         .from('products')
-        .select('code, image_url, current_stock, location');
+        .select('code, image_url, images, current_stock, location');
 
       const allMaterials = [...purchaseMaterials, ...assignedMaterials].map(item => {
         const localInfo = localData?.find(l => l.code === item.code);
+        // Parsear images si es string JSON
+        let imagesArray = [];
+        if (localInfo?.images) {
+          try {
+            imagesArray = typeof localInfo.images === 'string' ? JSON.parse(localInfo.images) : localInfo.images;
+          } catch { imagesArray = []; }
+        }
+        // Fallback: si no hay images pero sí image_url, usar ese
+        if (imagesArray.length === 0 && localInfo?.image_url) {
+          imagesArray = [{ url: localInfo.image_url, path: null }];
+        }
         return {
           ...item,
           image_url: localInfo?.image_url || null,
+          images: imagesArray,
           current_stock: localInfo?.current_stock || 0,
           location: localInfo?.location || 'Sin asignar'
         };
@@ -121,7 +141,7 @@ export default function ProductList() {
     }
   };
 
-  // ... Funciones CRUD (handleOpenModal, handleSaveAssigned, etc.) se mantienen igual ...
+  // Abrir modal y cargar galería del producto
   const handleOpenModal = (material = null) => {
     if (material) {
       setEditingMaterial(material);
@@ -132,9 +152,13 @@ export default function ProductList() {
         client_name: material.client || '',
         category: material.category
       });
+      setModalImages(material.images || []);
+      setModalImageIndex(0);
     } else {
       setEditingMaterial(null);
       setFormData({ code: '', description: '', unit: 'UN', client_name: '', category: '' });
+      setModalImages([]);
+      setModalImageIndex(0);
     }
     setShowModal(true);
   };
@@ -142,23 +166,47 @@ export default function ProductList() {
   const handleSaveAssigned = async (e) => {
     e.preventDefault();
     if (!formData.client_name) return alert("Selecciona un cliente");
+    
+    // FORZAR MAYÚSCULAS en descripción y código
+    const upperDescription = formData.description ? formData.description.toUpperCase() : '';
+    const upperCode = formData.code ? formData.code.toUpperCase() : '';
+    const upperCategory = formData.category ? formData.category.toUpperCase() : '';
+    const upperUnit = formData.unit ? formData.unit.toUpperCase() : 'UN';
+    
     try {
       const payload = {
-        code: formData.code,
-        description: formData.description,
-        unit: formData.unit,
+        code: upperCode,
+        description: upperDescription,
+        unit: upperUnit,
         client_name: formData.client_name,
-        category: formData.category
+        category: upperCategory
       };
+      
       if (editingMaterial) {
         await supabase.from('assigned_materials').update(payload).eq('id', editingMaterial.origin_id);
+        // Actualizar products también
+        await supabase.from('products').upsert({ 
+          code: upperCode, 
+          name: upperDescription, 
+          unit: upperUnit,
+          images: JSON.stringify(modalImages)
+        }, { onConflict: 'code' });
       } else {
         await supabase.from('assigned_materials').insert([payload]);
+        // Crear registro en products para poder adjuntar imágenes
+        await supabase.from('products').upsert({ 
+          code: upperCode, 
+          name: upperDescription, 
+          unit: upperUnit,
+          images: JSON.stringify(modalImages)
+        }, { onConflict: 'code' });
       }
+      
       setShowModal(false);
       fetchCombinedData();
       alert(editingMaterial ? 'Actualizado' : 'Creado');
     } catch (error) {
+      console.error('Error guardando:', error);
       alert('Error al guardar.');
     }
   };
@@ -169,25 +217,125 @@ export default function ProductList() {
     if (!error) fetchCombinedData();
   };
 
+  // SUBIR IMÁGENES (galería real)
   const handleImageUpload = async (event, materialCod, materialName) => {
+    const upperCode = materialCod?.toUpperCase() || '';
+    const upperName = materialName?.toUpperCase() || '';
+    
     try {
-      setUploading(materialCod);
-      const file = event.target.files[0];
-      if (!file) return;
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${materialCod}-${Date.now()}.${fileExt}`;
-      const filePath = `${fileName}`;
-      const { error: uploadError } = await supabase.storage.from('material-images').upload(filePath, file);
-      if (uploadError) throw uploadError;
-      const { data: publicUrlData } = supabase.storage.from('material-images').getPublicUrl(filePath);
-      const publicUrl = publicUrlData.publicUrl;
-      await supabase.from('products').upsert({ code: materialCod, name: materialName, image_url: publicUrl }, { onConflict: 'code' });
-      setMaterials(prev => prev.map(m => m.code === materialCod ? { ...m, image_url: publicUrl } : m));
-      alert('Imagen actualizada');
+      setUploading(upperCode);
+      const files = Array.from(event.target.files || []);
+      if (files.length === 0) {
+        alert('No se seleccionó ningún archivo.');
+        return;
+      }
+
+      // Obtener imágenes actuales del producto
+      const { data: prodData } = await supabase.from('products').select('images').eq('code', upperCode).maybeSingle();
+      let currentImages = [];
+      if (prodData?.images) {
+        try {
+          currentImages = typeof prodData.images === 'string' ? JSON.parse(prodData.images) : prodData.images;
+        } catch { currentImages = []; }
+      }
+
+      for (const file of files) {
+        try {
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${upperCode}-${Date.now()}-${Math.random().toString(36).substr(2,6)}.${fileExt}`;
+          const { error: uploadError } = await supabase.storage.from('material-images').upload(fileName, file);
+          if (uploadError) throw uploadError;
+          
+          const { data: publicUrlData } = supabase.storage.from('material-images').getPublicUrl(fileName);
+          const publicUrl = publicUrlData?.publicUrl || null;
+          
+          if (publicUrl) {
+            currentImages.push({ url: publicUrl, path: fileName });
+          }
+        } catch (fileErr) {
+          console.error('Error subiendo archivo:', fileErr);
+          alert('Error subiendo archivo: ' + (fileErr.message || fileErr));
+        }
+      }
+
+      // Guardar array actualizado en products
+      const mainImageUrl = currentImages.length > 0 ? currentImages[0].url : null;
+      await supabase.from('products').upsert({ 
+        code: upperCode, 
+        name: upperName, 
+        image_url: mainImageUrl,
+        images: JSON.stringify(currentImages)
+      }, { onConflict: 'code' });
+      
+      // Actualizar estado local
+      setMaterials(prev => prev.map(m => m.code === upperCode ? { ...m, image_url: mainImageUrl, images: currentImages } : m));
+      setModalImages(currentImages);
+      
+      alert(`${files.length} imagen(es) subida(s) correctamente`);
     } catch (error) {
       console.error("Error imagen:", error);
+      alert('Error al subir imagen. Revisa la consola para más detalles.');
     } finally {
       setUploading(null);
+      // Reset input
+      event.target.value = '';
+    }
+  };
+
+  // ELIMINAR UNA IMAGEN de la galería
+  const deleteImage = async (materialCod, imageIndex) => {
+    const upperCode = materialCod?.toUpperCase() || '';
+    if (!window.confirm('¿Eliminar esta imagen?')) return;
+    
+    try {
+      // Obtener imágenes actuales
+      const { data: prodData } = await supabase.from('products').select('images, name').eq('code', upperCode).maybeSingle();
+      let currentImages = [];
+      if (prodData?.images) {
+        try {
+          currentImages = typeof prodData.images === 'string' ? JSON.parse(prodData.images) : prodData.images;
+        } catch { currentImages = []; }
+      }
+      
+      // Eliminar del storage si tiene path
+      const imageToDelete = currentImages[imageIndex];
+      if (imageToDelete?.path) {
+        await supabase.storage.from('material-images').remove([imageToDelete.path]);
+      }
+      
+      // Quitar del array
+      currentImages.splice(imageIndex, 1);
+      
+      // Actualizar BD
+      const mainImageUrl = currentImages.length > 0 ? currentImages[0].url : null;
+      await supabase.from('products').update({ 
+        image_url: mainImageUrl,
+        images: JSON.stringify(currentImages)
+      }).eq('code', upperCode);
+      
+      // Actualizar estado
+      setMaterials(prev => prev.map(m => m.code === upperCode ? { ...m, image_url: mainImageUrl, images: currentImages } : m));
+      setModalImages(currentImages);
+      if (modalImageIndex >= currentImages.length) {
+        setModalImageIndex(Math.max(0, currentImages.length - 1));
+      }
+      
+      alert('Imagen eliminada');
+    } catch (err) {
+      console.error('Error eliminando imagen:', err);
+      alert('No se pudo eliminar la imagen. Revisa la consola.');
+    }
+  };
+
+  // Navegar galería
+  const nextImage = () => {
+    if (modalImages.length > 1) {
+      setModalImageIndex((prev) => (prev + 1) % modalImages.length);
+    }
+  };
+  const prevImage = () => {
+    if (modalImages.length > 1) {
+      setModalImageIndex((prev) => (prev - 1 + modalImages.length) % modalImages.length);
     }
   };
 
@@ -295,13 +443,26 @@ export default function ProductList() {
                         {filteredMaterials.map(item => (
                             <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="px-6 py-3">
-                                    <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center relative border overflow-hidden group">
-                                        {item.image_url ? <img src={item.image_url} className="w-full h-full object-cover"/> : <ImageIcon size={20} className="text-slate-300"/>}
-                                        <label className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
-                                            <Camera size={16} className="text-white"/>
-                                            <input type="file" className="hidden" accept="image/*" onChange={(e)=>handleImageUpload(e, item.code, item.name)}/>
+                                    <div className="w-12 h-12 rounded-lg bg-slate-100 flex items-center justify-center relative border overflow-hidden group cursor-pointer"
+                                         onClick={() => item.images?.length > 0 && setLightboxImage(item.images[0].url)}>
+                                        {item.images?.length > 0 ? (
+                                          <>
+                                            <img src={item.images[0].url} className="w-full h-full object-cover"/>
+                                            {item.images.length > 1 && (
+                                              <span className="absolute bottom-0 right-0 bg-black/70 text-white text-[9px] px-1 rounded-tl">
+                                                +{item.images.length - 1}
+                                              </span>
+                                            )}
+                                          </>
+                                        ) : (
+                                          <ImageIcon size={20} className="text-slate-300"/>
+                                        )}
+                                        <label className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity"
+                                               onClick={(e) => e.stopPropagation()}>
+                                          <Camera size={16} className="text-white"/>
+                                          <input type="file" className="sr-only" multiple accept="image/*" onChange={(e)=>handleImageUpload(e, item.code, item.name)}/>
                                         </label>
-                                        {uploading === item.code && <div className="absolute inset-0 bg-white/80 flex items-center justify-center"><Loader size={16} className="animate-spin text-blue-600"/></div>}
+                                        {uploading === item.code?.toUpperCase() && <div className="absolute inset-0 bg-white/80 flex items-center justify-center"><Loader size={16} className="animate-spin text-blue-600"/></div>}
                                     </div>
                                 </td>
                                 <td className="px-6 py-3">
@@ -330,12 +491,12 @@ export default function ProductList() {
                                     </span>
                                 </td>
                                 <td className="px-6 py-3 text-right">
-                                    {item.is_editable && (
-                                        <div className="flex justify-end gap-2">
-                                            <button onClick={()=>handleOpenModal(item)} className="p-2 hover:bg-blue-50 text-blue-600 rounded-full transition-colors"><Edit size={16}/></button>
-                                            <button onClick={()=>handleDeleteAssigned(item.origin_id)} className="p-2 hover:bg-red-50 text-red-600 rounded-full transition-colors"><Trash2 size={16}/></button>
-                                        </div>
-                                    )}
+                                    <div className="flex justify-end gap-2">
+                                        <button onClick={()=>handleOpenModal(item)} className="p-2 hover:bg-blue-50 text-blue-600 rounded-full transition-colors" title="Ver / Editar"><Edit size={16}/></button>
+                                        {item.is_editable && (
+                                            <button onClick={()=>handleDeleteAssigned(item.origin_id)} className="p-2 hover:bg-red-50 text-red-600 rounded-full transition-colors" title="Eliminar"><Trash2 size={16}/></button>
+                                        )}
+                                    </div>
                                 </td>
                             </tr>
                         ))}
@@ -349,8 +510,20 @@ export default function ProductList() {
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 animate-in fade-in">
                 {filteredMaterials.map(item => (
                     <div key={item.id} className="bg-white p-4 rounded-xl border border-slate-200 hover:shadow-lg hover:border-blue-200 transition-all group relative">
-                        <div className="aspect-square bg-slate-100 rounded-lg mb-3 flex items-center justify-center relative overflow-hidden">
-                             {item.image_url ? <img src={item.image_url} className="w-full h-full object-cover"/> : <ImageIcon size={32} className="text-slate-300"/>}
+                        <div className="aspect-square bg-slate-100 rounded-lg mb-3 flex items-center justify-center relative overflow-hidden cursor-pointer"
+                             onClick={() => item.images?.length > 0 && setLightboxImage(item.images[0].url)}>
+                             {item.images?.length > 0 ? (
+                               <>
+                                 <img src={item.images[0].url} className="w-full h-full object-cover"/>
+                                 {item.images.length > 1 && (
+                                   <span className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-0.5 rounded">
+                                     +{item.images.length - 1} más
+                                   </span>
+                                 )}
+                               </>
+                             ) : (
+                               <ImageIcon size={32} className="text-slate-300"/>
+                             )}
                              {item.origin === 'ASIGNADO' && <div className="absolute top-2 right-2 bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-sm">ASIGNADO</div>}
                         </div>
                         <h3 className="font-bold text-sm text-slate-800 line-clamp-2 min-h-[40px] leading-tight mb-1" title={item.name}>{item.name}</h3>
@@ -366,11 +539,11 @@ export default function ProductList() {
         )
       }
 
-      {/* Modal Crear/Editar */}
+      {/* Modal Crear/Editar con Galería */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-md animate-in zoom-in-95 duration-200 overflow-hidden">
-                <div className="p-5 border-b bg-slate-50 flex justify-between items-center">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg animate-in zoom-in-95 duration-200 overflow-hidden max-h-[90vh] overflow-y-auto">
+                <div className="p-5 border-b bg-slate-50 flex justify-between items-center sticky top-0 z-10">
                     <h3 className="font-bold text-lg text-slate-800">{editingMaterial ? 'Editar Material' : 'Nuevo Material Asignado'}</h3>
                     <button onClick={()=>setShowModal(false)} className="text-slate-400 hover:text-red-500 transition-colors"><X size={20}/></button>
                 </div>
@@ -389,29 +562,112 @@ export default function ProductList() {
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                              <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Código Interno</label>
-                             <input required className="w-full border rounded-lg px-3 py-2 font-mono text-sm focus:ring-2 focus:ring-blue-100 outline-none" placeholder="Ej: MAT-001" value={formData.code} onChange={e=>setFormData({...formData, code: e.target.value})}/>
+                             <input required className="w-full border rounded-lg px-3 py-2 font-mono text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="Ej: MAT-001" value={formData.code} onChange={e=>setFormData({...formData, code: e.target.value.toUpperCase()})}/>
                         </div>
                         <div>
                              <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Unidad</label>
-                             <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none" placeholder="UN, M, KG..." value={formData.unit} onChange={e=>setFormData({...formData, unit: e.target.value})}/>
+                             <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="UN, M, KG..." value={formData.unit} onChange={e=>setFormData({...formData, unit: e.target.value.toUpperCase()})}/>
                         </div>
                     </div>
 
                     <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Descripción del Material</label>
-                        <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none font-bold" placeholder="Ej: Guantes de Seguridad Nitrilo" value={formData.description} onChange={e=>setFormData({...formData, description: e.target.value})}/>
+                        <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none font-bold uppercase" placeholder="Ej: Guantes de Seguridad Nitrilo" value={formData.description} onChange={e=>setFormData({...formData, description: e.target.value.toUpperCase()})}/>
                     </div>
                     
                     <div>
                         <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Categoría / Familia</label>
-                        <input className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none" placeholder="Ej: EPP, HERRAMIENTAS..." value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value})}/>
+                        <input className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="Ej: EPP, HERRAMIENTAS..." value={formData.category} onChange={e=>setFormData({...formData, category: e.target.value.toUpperCase()})}/>
                     </div>
 
-                    <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 mt-2">
+                    {/* GALERÍA DE IMÁGENES */}
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">Galería de Imágenes ({modalImages.length})</label>
+                        
+                        {/* Carrusel principal */}
+                        <div className="relative bg-slate-100 rounded-lg overflow-hidden aspect-video mb-3">
+                          {modalImages.length > 0 ? (
+                            <>
+                              <img 
+                                src={modalImages[modalImageIndex]?.url} 
+                                className="w-full h-full object-contain cursor-zoom-in"
+                                onClick={() => setLightboxImage(modalImages[modalImageIndex]?.url)}
+                              />
+                              {/* Navegación */}
+                              {modalImages.length > 1 && (
+                                <>
+                                  <button type="button" onClick={prevImage} className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white p-2 rounded-full shadow-lg transition-all">
+                                    <ChevronLeft size={20}/>
+                                  </button>
+                                  <button type="button" onClick={nextImage} className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white p-2 rounded-full shadow-lg transition-all">
+                                    <ChevronRight size={20}/>
+                                  </button>
+                                </>
+                              )}
+                              {/* Contador */}
+                              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-3 py-1 rounded-full">
+                                {modalImageIndex + 1} / {modalImages.length}
+                              </div>
+                              {/* Botón eliminar imagen actual */}
+                              <button type="button" onClick={() => deleteImage(formData.code, modalImageIndex)} 
+                                      className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-2 rounded-full shadow-lg transition-all">
+                                <Trash2 size={16}/>
+                              </button>
+                            </>
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400">
+                              <ImageIcon size={48} className="mb-2"/>
+                              <span className="text-sm">Sin imágenes</span>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Miniaturas */}
+                        {modalImages.length > 1 && (
+                          <div className="flex gap-2 overflow-x-auto pb-2">
+                            {modalImages.map((img, idx) => (
+                              <button 
+                                key={idx} 
+                                type="button"
+                                onClick={() => setModalImageIndex(idx)}
+                                className={`w-16 h-16 rounded-md overflow-hidden border-2 flex-shrink-0 transition-all ${idx === modalImageIndex ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-200 hover:border-slate-400'}`}
+                              >
+                                <img src={img.url} className="w-full h-full object-cover"/>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* Botón subir */}
+                        <div className="flex items-center gap-3 mt-3">
+                          <label className="inline-flex items-center gap-2 cursor-pointer bg-slate-900 hover:bg-black text-white px-4 py-2.5 rounded-lg transition-all">
+                            <Camera size={16}/> 
+                            <span className="text-sm font-bold">Agregar Imágenes</span>
+                            <input type="file" className="sr-only" multiple accept="image/*" onChange={(e)=>{
+                              if (!formData.code) return alert('Completa el Código antes de subir imágenes.');
+                              handleImageUpload(e, formData.code, formData.description);
+                            }} />
+                          </label>
+                          {uploading && <Loader size={20} className="animate-spin text-indigo-600"/>}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-2">Puedes subir varias imágenes. Haz clic en una imagen para verla en grande.</p>
+                    </div>
+
+                    <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 mt-4">
                         {editingMaterial ? 'Guardar Cambios' : 'Crear Material'}
                     </button>
                 </form>
             </div>
+        </div>
+      )}
+
+      {/* Lightbox para ver imagen grande */}
+      {lightboxImage && (
+        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4" onClick={() => setLightboxImage(null)}>
+          <button className="absolute top-4 right-4 text-white hover:text-red-400 transition-colors" onClick={() => setLightboxImage(null)}>
+            <X size={32}/>
+          </button>
+          <img src={lightboxImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()}/>
         </div>
       )}
     </div>
