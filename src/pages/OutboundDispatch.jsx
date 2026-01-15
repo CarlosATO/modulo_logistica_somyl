@@ -126,6 +126,59 @@ export default function OutboundDispatch() {
       }
   }, [selectedProject, projects]);
 
+  // Cargar automáticamente materiales disponibles cuando se selecciona bodega + proyecto
+  useEffect(() => {
+      const loadAvailableMaterials = async () => {
+          if (!selectedWarehouse || !selectedProject) return;
+
+          try {
+              // 1) Obtener stock físico en la bodega
+              const { data: rackStock } = await supabase
+                  .from('product_locations')
+                  .select('product_id, quantity')
+                  .eq('warehouse_id', selectedWarehouse)
+                  .gt('quantity', 0)
+                  .limit(1000);
+
+              if (!rackStock || rackStock.length === 0) {
+                  setSearchResults([]);
+                  return;
+              }
+
+              const productIds = [...new Set(rackStock.map(r => r.product_id))];
+
+              // 2) Traer datos de productos
+              const { data: prods } = await supabase
+                  .from('products')
+                  .select('*')
+                  .in('id', productIds)
+                  .order('name', { ascending: true });
+
+              // 3) Mapear stock por producto
+              const stockMap = {};
+              rackStock.forEach(rs => {
+                  stockMap[rs.product_id] = (stockMap[rs.product_id] || 0) + Number(rs.quantity);
+              });
+
+              // 4) Cruzar y filtrar por cliente/proyecto (si aplica)
+              const enriched = (prods || []).map(p => ({ ...p, warehouseStock: stockMap[p.id] || 0 }))
+                  .filter(prod => prod.warehouseStock > 0)
+                  .filter(prod => {
+                      const assignedInfo = assignedMaterials.find(a => a.code === prod.code);
+                      if (!assignedInfo) return true;
+                      return assignedInfo.client_name === projectClient;
+                  });
+
+              setSearchResults(enriched);
+          } catch (err) {
+              console.error('Error cargando materiales disponibles:', err);
+              setSearchResults([]);
+          }
+      };
+
+      loadAvailableMaterials();
+  }, [selectedWarehouse, selectedProject, projectClient, assignedMaterials]);
+
   useEffect(() => {
     if (cart.length === 0) setPdfDownloaded(false);
   }, [cart]);
