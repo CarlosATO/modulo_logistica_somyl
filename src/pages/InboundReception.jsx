@@ -368,7 +368,7 @@ export default function InboundReception() {
                 }).eq('id', productId);
             } else {
                 const { data: newProd } = await supabase.from('products').insert({
-                    code: item.code, name: item.name, unit: item.unit, 
+                    code: item.code, name: item.name ? item.name.toUpperCase() : item.name, unit: item.unit, 
                     price: item.price, current_stock: item.quantity
                 }).select().single();
                 productId = newProd.id;
