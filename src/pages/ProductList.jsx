@@ -718,7 +718,7 @@ export default function ProductList() {
               </div>
 
               <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 mt-4">
-                {editingMaterial ? 'Guardar Cambios' : 'Crear Material'}
+                {editingMaterial && !editingMaterial.is_editable ? 'Guardar Configuración' : (editingMaterial ? 'Guardar Cambios' : 'Crear Material')}
               </button>
             </form>
           </div>
