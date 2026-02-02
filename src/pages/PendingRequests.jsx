@@ -50,7 +50,7 @@ const PendingRequests = () => {
             if (employeeIds.length > 0) {
                 const { data: emps, error: empError } = await supabase
                     .from('rrhh_employees')
-                    .select('id, first_name, last_name, rut, charge') // Added charge
+                    .select('id, first_name, last_name, rut, job:job_id(name)')
                     .in('id', employeeIds);
                 if (empError) throw empError;
 
@@ -160,7 +160,7 @@ const PendingRequests = () => {
         doc.setFont('helvetica', 'normal');
         doc.text(`Nombre: ${emp.first_name} ${emp.last_name}`.toUpperCase(), 25, 76);
         doc.text(`RUT: ${emp.rut}`, 25, 81);
-        doc.text(`Cargo: ${emp.charge || '________________________'}`, 25, 86);
+        doc.text(`Cargo: ${emp.job?.name || '________________________'}`, 25, 86);
 
         // Col 2: Delivery Info
         doc.setTextColor(...blueColor);
