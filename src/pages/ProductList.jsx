@@ -208,25 +208,34 @@ export default function ProductList() {
       };
 
       if (editingMaterial) {
-        await supabase.from('assigned_materials').update(payload).eq('id', editingMaterial.origin_id);
+        // Actualizar asignado
+        const { error: assignError } = await supabase.from('assigned_materials').update(payload).eq('id', editingMaterial.origin_id);
+        if (assignError) throw assignError;
+
         // Actualizar products también
-        await supabase.from('products').upsert({
+        const { error: prodError } = await supabase.from('products').upsert({
           code: upperCode,
           name: upperDescription,
           unit: upperUnit,
           images: JSON.stringify(modalImages),
-          is_rrhh_visible: false // Forzar FALSE en asignados según regla de negocio
+          is_rrhh_visible: formData.is_rrhh_visible // AHORA SÍ usa el valor del form
         }, { onConflict: 'code' });
+        if (prodError) throw prodError;
+
       } else {
-        await supabase.from('assigned_materials').insert([payload]);
-        // Crear registro en products para poder adjuntar imágenes
-        await supabase.from('products').upsert({
+        // Crear asignado
+        const { error: assignError } = await supabase.from('assigned_materials').insert([payload]);
+        if (assignError) throw assignError;
+
+        // Crear registro en products
+        const { error: prodError } = await supabase.from('products').upsert({
           code: upperCode,
           name: upperDescription,
           unit: upperUnit,
           images: JSON.stringify(modalImages),
-          is_rrhh_visible: false // Forzar FALSE en asignados
+          is_rrhh_visible: formData.is_rrhh_visible // AHORA SÍ usa el valor del form
         }, { onConflict: 'code' });
+        if (prodError) throw prodError;
       }
 
       setShowModal(false);
@@ -234,7 +243,7 @@ export default function ProductList() {
       alert(editingMaterial ? 'Actualizado' : 'Creado');
     } catch (error) {
       console.error('Error guardando:', error);
-      alert('Error al guardar.');
+      alert('Error al guardar: ' + (error.message || 'Desconocido'));
     }
   };
 
