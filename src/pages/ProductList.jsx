@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Search, Filter, Camera, Image as ImageIcon, Loader, LayoutGrid,
   List as ListIcon, X, Plus, Edit, Trash2, Save, Building, Users,
-  ChevronLeft, ChevronRight, ZoomIn
+  ChevronLeft, ChevronRight, ZoomIn, Eye
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
 import Combobox from '../components/Combobox';
@@ -498,7 +498,11 @@ export default function ProductList() {
                     </td>
                     <td className="px-6 py-3 text-right">
                       <div className="flex justify-end gap-2">
-                        <button onClick={() => handleOpenModal(item)} className="p-2 hover:bg-blue-50 text-blue-600 rounded-full transition-colors" title="Ver / Editar"><Edit size={16} /></button>
+                        {item.is_editable ? (
+                          <button onClick={() => handleOpenModal(item)} className="p-2 hover:bg-blue-50 text-blue-600 rounded-full transition-colors" title="Editar"><Edit size={16} /></button>
+                        ) : (
+                          <button onClick={() => handleOpenModal(item)} className="p-2 hover:bg-slate-50 text-slate-400 rounded-full transition-colors" title="Ver Detalle"><Eye size={16} /></button>
+                        )}
                         {item.is_editable && (
                           <button onClick={() => handleDeleteAssigned(item.origin_id)} className="p-2 hover:bg-red-50 text-red-600 rounded-full transition-colors" title="Eliminar"><Trash2 size={16} /></button>
                         )}
@@ -673,9 +677,11 @@ export default function ProductList() {
                 <p className="text-[10px] text-slate-400 mt-2">Puedes subir varias imágenes. Haz clic en una imagen para verla en grande.</p>
               </div>
 
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 mt-4">
-                {editingMaterial ? 'Guardar Cambios' : 'Crear Material'}
-              </button>
+              {(!editingMaterial || editingMaterial.is_editable) && (
+                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 mt-4">
+                  {editingMaterial ? 'Guardar Cambios' : 'Crear Material'}
+                </button>
+              )}
             </form>
           </div>
         </div>
