@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Search, Filter, Camera, Image as ImageIcon, Loader, LayoutGrid,
   List as ListIcon, X, Plus, Edit, Trash2, Save, Building, Users,
-  ChevronLeft, ChevronRight, ZoomIn, Eye
+  ChevronLeft, ChevronRight, ZoomIn, Eye, Settings
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
 import Combobox from '../components/Combobox';
@@ -99,17 +99,15 @@ export default function ProductList() {
         code: m.code,
         name: m.description,
         category: m.category || 'ASIGNADO',
-        client: m.client_name,
         origin: 'ASIGNADO',
         is_editable: true,
-        unit: m.unit,
-        is_rrhh_visible: m.is_rrhh_visible || false
+        unit: m.unit
       }));
 
       // 3. FOTOS Y STOCK (ahora con images array)
       const { data: localData } = await supabase
         .from('products')
-        .select('code, image_url, images, current_stock, location');
+        .select('code, image_url, images, current_stock, location, is_rrhh_visible');
 
       const allMaterials = [...purchaseMaterials, ...assignedMaterials].map(item => {
         const localInfo = localData?.find(l => l.code === item.code);
@@ -129,7 +127,8 @@ export default function ProductList() {
           image_url: localInfo?.image_url || null,
           images: imagesArray,
           current_stock: localInfo?.current_stock || 0,
-          location: localInfo?.location || 'Sin asignar'
+          location: localInfo?.location || 'Sin asignar',
+          is_rrhh_visible: localInfo?.is_rrhh_visible || false
         };
       });
 
@@ -167,6 +166,28 @@ export default function ProductList() {
 
   const handleSaveAssigned = async (e) => {
     e.preventDefault();
+
+    // CASO 1: Item de COMPRA (Solo se actualiza flag RRHH e imágenes en 'products')
+    if (editingMaterial && !editingMaterial.is_editable) {
+      try {
+        await supabase.from('products').upsert({
+          code: editingMaterial.code, // Usar código original
+          is_rrhh_visible: formData.is_rrhh_visible, // Actualizar flag
+          name: editingMaterial.name, // Asegurar nombre
+          images: JSON.stringify(modalImages) // Asegurar imágenes
+        }, { onConflict: 'code' });
+
+        setShowModal(false);
+        fetchCombinedData();
+        alert('Configuración actualizada');
+      } catch (err) {
+        console.error(err);
+        alert('Error al guardar configuración');
+      }
+      return;
+    }
+
+    // CASO 2: Item ASIGNADO (Lógica completa)
     if (!formData.client_name) return alert("Selecciona un cliente");
 
     // FORZAR MAYÚSCULAS en descripción y código
@@ -181,8 +202,7 @@ export default function ProductList() {
         description: upperDescription,
         unit: upperUnit,
         client_name: formData.client_name,
-        category: upperCategory,
-        is_rrhh_visible: formData.is_rrhh_visible
+        category: upperCategory
       };
 
       if (editingMaterial) {
@@ -192,7 +212,8 @@ export default function ProductList() {
           code: upperCode,
           name: upperDescription,
           unit: upperUnit,
-          images: JSON.stringify(modalImages)
+          images: JSON.stringify(modalImages),
+          is_rrhh_visible: false // Forzar FALSE en asignados según regla de negocio
         }, { onConflict: 'code' });
       } else {
         await supabase.from('assigned_materials').insert([payload]);
@@ -201,7 +222,8 @@ export default function ProductList() {
           code: upperCode,
           name: upperDescription,
           unit: upperUnit,
-          images: JSON.stringify(modalImages)
+          images: JSON.stringify(modalImages),
+          is_rrhh_visible: false // Forzar FALSE en asignados
         }, { onConflict: 'code' });
       }
 
@@ -558,51 +580,69 @@ export default function ProductList() {
               <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-red-500 transition-colors"><X size={20} /></button>
             </div>
             <form onSubmit={handleSaveAssigned} className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Cliente Propietario</label>
-                <Combobox
-                  options={clientsList.map(c => ({ id: c, name: c }))}
-                  value={formData.client_name}
-                  onChange={(id) => setFormData({ ...formData, client_name: id })}
-                  placeholder="-- Seleccionar Cliente --"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">Este material será exclusivo de este cliente.</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Código Interno</label>
-                  <input required className="w-full border rounded-lg px-3 py-2 font-mono text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="Ej: MAT-001" value={formData.code} onChange={e => setFormData({ ...formData, code: e.target.value.toUpperCase() })} />
+              {/* Checkbox SOLO para items de Compra (no editables) */}
+              {editingMaterial && !editingMaterial.is_editable && (
+                <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100 mb-4">
+                  <input
+                    type="checkbox"
+                    id="is_rrhh_visible"
+                    className="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500"
+                    checked={formData.is_rrhh_visible}
+                    onChange={e => setFormData({ ...formData, is_rrhh_visible: e.target.checked })}
+                  />
+                  <label htmlFor="is_rrhh_visible" className="text-sm font-bold text-indigo-900 cursor-pointer select-none">
+                    Disponible para Asignación RRHH
+                    <span className="block text-[10px] font-normal text-indigo-700">Marcar si es EPP, Notebook, Celular, etc.</span>
+                  </label>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Unidad</label>
-                  <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="UN, M, KG..." value={formData.unit} onChange={e => setFormData({ ...formData, unit: e.target.value.toUpperCase() })} />
+              )}
+
+              {/* Mostrar campos de edición SOLO si es material propio (Nuevo o Asignado) */}
+              {(!editingMaterial || editingMaterial.is_editable) && (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Cliente Propietario</label>
+                    <Combobox
+                      options={clientsList.map(c => ({ id: c, name: c }))}
+                      value={formData.client_name}
+                      onChange={(id) => setFormData({ ...formData, client_name: id })}
+                      placeholder="-- Seleccionar Cliente --"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">Este material será exclusivo de este cliente.</p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Código Interno</label>
+                      <input required className="w-full border rounded-lg px-3 py-2 font-mono text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="Ej: MAT-001" value={formData.code} onChange={e => setFormData({ ...formData, code: e.target.value.toUpperCase() })} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Unidad</label>
+                      <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="UN, M, KG..." value={formData.unit} onChange={e => setFormData({ ...formData, unit: e.target.value.toUpperCase() })} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Descripción del Material</label>
+                    <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none font-bold uppercase" placeholder="Ej: Guantes de Seguridad Nitrilo" value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value.toUpperCase() })} />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Categoría / Familia</label>
+                    <input className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="Ej: EPP, HERRAMIENTAS..." value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value.toUpperCase() })} />
+                  </div>
+                </>
+              )}
+
+              {(!editingMaterial || !editingMaterial.is_editable) && (
+                <div className="bg-slate-50 p-4 rounded text-center mb-4">
+                  {editingMaterial && !editingMaterial.is_editable && (
+                    <p className="text-sm text-slate-500">
+                      Estás viendo un ítem de <b>COMPRA</b>. Solo puedes editar su visibilidad para RRHH y sus imágenes.
+                    </p>
+                  )}
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Descripción del Material</label>
-                <input required className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none font-bold uppercase" placeholder="Ej: Guantes de Seguridad Nitrilo" value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value.toUpperCase() })} />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Categoría / Familia</label>
-                <input className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 outline-none uppercase" placeholder="Ej: EPP, HERRAMIENTAS..." value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value.toUpperCase() })} />
-              </div>
-
-              <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
-                <input
-                  type="checkbox"
-                  id="is_rrhh_visible"
-                  className="w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500"
-                  checked={formData.is_rrhh_visible}
-                  onChange={e => setFormData({ ...formData, is_rrhh_visible: e.target.checked })}
-                />
-                <label htmlFor="is_rrhh_visible" className="text-sm font-bold text-indigo-900 cursor-pointer select-none">
-                  Disponible para Asignación RRHH
-                  <span className="block text-[10px] font-normal text-indigo-700">Marcar si es EPP, Notebook, Celular, etc.</span>
-                </label>
-              </div>
+              )}
 
               {/* GALERÍA DE IMÁGENES */}
               <div>
@@ -677,11 +717,9 @@ export default function ProductList() {
                 <p className="text-[10px] text-slate-400 mt-2">Puedes subir varias imágenes. Haz clic en una imagen para verla en grande.</p>
               </div>
 
-              {(!editingMaterial || editingMaterial.is_editable) && (
-                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 mt-4">
-                  {editingMaterial ? 'Guardar Cambios' : 'Crear Material'}
-                </button>
-              )}
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 mt-4">
+                {editingMaterial ? 'Guardar Cambios' : 'Crear Material'}
+              </button>
             </form>
           </div>
         </div>
