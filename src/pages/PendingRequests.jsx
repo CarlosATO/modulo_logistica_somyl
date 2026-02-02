@@ -19,6 +19,7 @@ const PendingRequests = () => {
 
     // Delivery Details State (Map of reqId -> { warehouseId, price })
     const [deliveryDetails, setDeliveryDetails] = useState({});
+    const [warehouseStock, setWarehouseStock] = useState({}); // Map: productId -> { warehouseId: stock }
 
     useEffect(() => {
         fetchData();
@@ -38,7 +39,7 @@ const PendingRequests = () => {
                 .from('material_requests')
                 .select(`
                     *,
-                    product:products(name, code, unit, current_stock, price)
+                    product:products(id, name, code, unit, current_stock, price)
                 `)
                 .eq('status', 'PENDING')
                 .order('created_at', { ascending: true });
@@ -57,6 +58,31 @@ const PendingRequests = () => {
                 const empMap = {};
                 emps.forEach(e => empMap[e.id] = e);
                 setEmployees(empMap);
+            }
+
+            // 3. Fetch Stock per Warehouse (Calculated from Movements)
+            const productIds = [...new Set(reqs.map(r => r.product_id || r.product?.id))].filter(Boolean); // Ensure IDs
+            if (productIds.length > 0) {
+                const { data: movs } = await supabase
+                    .from('movements')
+                    .select('product_id, warehouse_id, type, quantity')
+                    .in('product_id', productIds);
+
+                if (movs) {
+                    const stockMap = {}; // { prodId: { whId: qty } }
+                    movs.forEach(m => {
+                        if (!stockMap[m.product_id]) stockMap[m.product_id] = {};
+                        if (!stockMap[m.product_id][m.warehouse_id]) stockMap[m.product_id][m.warehouse_id] = 0;
+
+                        const qty = Number(m.quantity);
+                        if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') {
+                            stockMap[m.product_id][m.warehouse_id] += qty;
+                        } else if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') {
+                            stockMap[m.product_id][m.warehouse_id] -= qty;
+                        }
+                    });
+                    setWarehouseStock(stockMap);
+                }
             }
 
             // 3. Initialize Delivery Details (Default Price)
@@ -261,11 +287,19 @@ const PendingRequests = () => {
     const handleConfirmDelivery = async (empId) => {
         const items = groupedRequests[empId];
 
-        // Validation: Warehouses Selected
-        const missingWh = items.some(item => !deliveryDetails[item.id]?.warehouseId);
-        if (missingWh) {
-            toast.error('⚠️ Debes seleccionar una Bodega para cada ítem.');
-            return;
+        // Validation: Warehouses Selected & Stock check
+        for (const item of items) {
+            const details = deliveryDetails[item.id];
+            if (!details?.warehouseId) {
+                toast.error(`⚠️ Faltan datos para: ${item.product?.name}`);
+                return;
+            }
+            const stocks = warehouseStock[item.product_id] || {};
+            const available = stocks[details.warehouseId] || 0;
+            if (available < item.quantity) {
+                toast.error(`⚠️ Stock insuficiente en bodega seleccionada para: ${item.product?.name}`);
+                return;
+            }
         }
 
         if (!signedFile) {
@@ -280,7 +314,7 @@ const PendingRequests = () => {
             // 1. Upload File
             const fileExt = signedFile.name.split('.').pop();
             const fileName = `entregas_rrhh/${empId}_${Date.now()}.${fileExt}`;
-            const { error: uploadError } = await supabase.storage.from('rrhh-files').upload(fileName, signedFile);
+            const { error: uploadError } = await supabase.storage.from('documents').upload(fileName, signedFile);
             if (uploadError) throw uploadError;
 
             // 2. Process Items (Transaction simulation)
@@ -441,7 +475,10 @@ const PendingRequests = () => {
                                         <div className="space-y-4 mb-8">
                                             {items.map(item => {
                                                 const details = deliveryDetails[item.id] || {};
-                                                const hasStock = (item.product?.current_stock || 0) >= item.quantity;
+                                                // Calculate available stocks for this product
+                                                const stocks = warehouseStock[item.product_id] || {}; // warehouseId -> qty
+                                                const selectedWhStock = stocks[details.warehouseId] || 0;
+                                                const hasStockInSelected = selectedWhStock >= item.quantity;
 
                                                 return (
                                                     <div key={item.id} className="bg-white p-4 rounded-lg border border-indigo-100 shadow-sm grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
@@ -458,15 +495,25 @@ const PendingRequests = () => {
                                                         <div className="md:col-span-3">
                                                             <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Bodega Origen</label>
                                                             <select
-                                                                className={`w-full text-sm border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-200 font-bold ${!details.warehouseId ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}
+                                                                className={`w-full text-sm border rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-200 font-bold ${!details.warehouseId ? 'border-red-300 bg-red-50' :
+                                                                    !hasStockInSelected ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200'
+                                                                    }`}
                                                                 value={details.warehouseId}
                                                                 onChange={e => handleDetailChange(item.id, 'warehouseId', e.target.value)}
                                                             >
                                                                 <option value="">-- Seleccionar --</option>
-                                                                {warehouses.map(w => (
-                                                                    <option key={w.id} value={w.id}>{w.name}</option>
-                                                                ))}
+                                                                {warehouses.map(w => {
+                                                                    const st = stocks[w.id] || 0;
+                                                                    return (
+                                                                        <option key={w.id} value={w.id} disabled={st < item.quantity}>
+                                                                            {w.name} (Stock: {st})
+                                                                        </option>
+                                                                    );
+                                                                })}
                                                             </select>
+                                                            {details.warehouseId && !hasStockInSelected && (
+                                                                <p className="text-[10px] text-red-500 font-bold mt-1">⚠️ Stock insuficiente ({selectedWhStock})</p>
+                                                            )}
                                                         </div>
 
                                                         {/* Price Input */}
