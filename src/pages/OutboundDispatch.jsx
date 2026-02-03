@@ -155,10 +155,13 @@ export default function OutboundDispatch() {
         }
     }, [selectedProject, projects]);
 
-    // Cargar automáticamente materiales disponibles cuando se selecciona bodega + proyecto
+    // Cargar automáticamente materiales disponibles cuando se selecciona bodega (y proyecto/cliente si aplica)
     useEffect(() => {
         const loadAvailableMaterials = async () => {
-            if (!selectedWarehouse || !selectedProject) return;
+            if (!selectedWarehouse) return;
+            // SI es Despacho Directo o Subcontrato, requerimos Proyecto. 
+            // SI es Externo, no requerimos Proyecto.
+            if (dispatchMode !== 'EXTERNAL' && !selectedProject) return;
 
             try {
                 // 1) Obtener stock físico en la bodega
@@ -167,7 +170,7 @@ export default function OutboundDispatch() {
                     .select('product_id, quantity')
                     .eq('warehouse_id', selectedWarehouse)
                     .gt('quantity', 0)
-                    .limit(1000);
+                    .limit(2000); // Aumentamos límite para asegurar ver todo
 
                 if (!rackStock || rackStock.length === 0) {
                     setSearchResults([]);
@@ -189,14 +192,18 @@ export default function OutboundDispatch() {
                     stockMap[rs.product_id] = (stockMap[rs.product_id] || 0) + Number(rs.quantity);
                 });
 
-                // 4) Cruzar y filtrar por cliente/proyecto (si aplica)
-                const enriched = (prods || []).map(p => ({ ...p, warehouseStock: stockMap[p.id] || 0 }))
-                    .filter(prod => prod.warehouseStock > 0)
-                    .filter(prod => {
+                // 4) Cruzar y filtrar
+                let enriched = (prods || []).map(p => ({ ...p, warehouseStock: stockMap[p.id] || 0 }))
+                    .filter(prod => prod.warehouseStock > 0);
+
+                // FILTRO DE CLIENTE solo si NO es Externo y hay un cliente de proyecto definido
+                if (dispatchMode !== 'EXTERNAL' && projectClient) {
+                    enriched = enriched.filter(prod => {
                         const assignedInfo = assignedMaterials.find(a => a.code === prod.code);
-                        if (!assignedInfo) return true;
+                        if (!assignedInfo) return true; // Si no está asignado, es 'general'
                         return assignedInfo.client_name === projectClient;
                     });
+                }
 
                 setSearchResults(enriched);
             } catch (err) {
@@ -206,7 +213,7 @@ export default function OutboundDispatch() {
         };
 
         loadAvailableMaterials();
-    }, [selectedWarehouse, selectedProject, projectClient, assignedMaterials]);
+    }, [selectedWarehouse, selectedProject, projectClient, assignedMaterials, dispatchMode]);
 
     useEffect(() => {
         if (cart.length === 0) setPdfDownloaded(false);
@@ -684,30 +691,44 @@ export default function OutboundDispatch() {
                     </div>
 
                     {/* 4. BÚSQUEDA Y CARRITO */}
-                    {selectedWarehouse && selectedProject && (
+
+                    {/* Condición: Debe haber bodega seleccionada. Y (Proyecto O es Externo) */}
+                    {(selectedWarehouse && (selectedProject || dispatchMode === 'EXTERNAL')) && (
                         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-                            <div className="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border h-fit">
-                                <div className="mb-6">
-                                    <GoogleSearchBar
-                                        placeholder="Buscar material por nombre o código..."
-                                        onSearch={(val) => handleSearch(val)}
+                            <div className="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border h-fit sticky top-6">
+                                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                    <Search size={20} className="text-indigo-600" /> Buscar Productos
+                                </h3>
+
+                                <div className="mb-4">
+                                    <Combobox
+                                        options={searchResults.map(p => ({
+                                            id: p.id,
+                                            name: `${p.name} (${p.code}) | Bodega: ${p.warehouseStock}`
+                                        }))}
+                                        value={null}
+                                        onChange={(val) => {
+                                            const product = searchResults.find(p => String(p.id) === String(val));
+                                            if (product) openPickModal(product);
+                                        }}
+                                        placeholder={searchResults.length > 0
+                                            ? `🔍 Buscar entre ${searchResults.length} productos...`
+                                            : "Cargando productos..."}
+                                        className="w-full shadow-sm"
                                     />
+                                    <p className="text-xs text-slate-400 mt-2 italic text-center">
+                                        Escribe nombre o código para filtrar. Selecciona para agregar.
+                                    </p>
                                 </div>
-                                <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
-                                    {searchResults.length === 0 && <p className="text-center text-slate-400 py-10 text-sm italic">Usa el buscador para encontrar materiales en esta bodega...</p>}
-                                    {searchResults.map(prod => (
-                                        <div key={prod.id} onClick={() => openPickModal(prod)} className="p-3 border rounded-lg cursor-pointer hover:bg-indigo-50 hover:border-indigo-300 transition-all flex justify-between items-center group shadow-sm">
-                                            <div className="flex-1">
-                                                <div className="font-bold text-sm text-slate-700 group-hover:text-indigo-700 transition-colors uppercase">{prod.name}</div>
-                                                <div className="text-[10px] font-mono text-slate-400">{prod.code}</div>
-                                            </div>
-                                            <div className="text-right ml-4">
-                                                <span className="bg-indigo-100 text-indigo-700 text-lg px-3 py-1 rounded-lg font-black">{prod.warehouseStock}</span>
-                                                <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">Disp. Bodega</p>
-                                            </div>
-                                        </div>
-                                    ))}
+
+                                <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100 text-center">
+                                    <p className="text-indigo-900 font-bold text-sm mb-1">
+                                        <Package size={16} className="inline mr-1" /> Catálogo Disponible
+                                    </p>
+                                    <p className="text-xs text-indigo-700">
+                                        Se muestran {searchResults.length} productos con stock físico &gt; 0 en esta bodega.
+                                    </p>
                                 </div>
                             </div>
 
