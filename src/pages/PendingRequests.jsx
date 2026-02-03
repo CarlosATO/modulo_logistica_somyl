@@ -66,13 +66,17 @@ const PendingRequests = () => {
             }
 
             // 3. Fetch Stock per Warehouse (From product_locations - physical stock)
-            const productIds = [...new Set(reqs.map(r => r.product_id || r.product?.id))].filter(Boolean);
+            // Use product.id from the join (UUID), not product_id which may be a code
+            const productIds = [...new Set(reqs.map(r => r.product?.id).filter(Boolean))];
+            console.log('Product IDs for stock query:', productIds);
             if (productIds.length > 0) {
-                const { data: stockData } = await supabase
+                const { data: stockData, error: stockError } = await supabase
                     .from('product_locations')
                     .select('product_id, warehouse_id, quantity')
                     .in('product_id', productIds)
                     .gt('quantity', 0);
+
+                console.log('Stock data from product_locations:', stockData, stockError);
 
                 if (stockData) {
                     const stockMap = {}; // { prodId: { whId: qty } }
@@ -523,8 +527,8 @@ const PendingRequests = () => {
                                             <div className="space-y-4 mb-8">
                                                 {items.map(item => {
                                                     const details = deliveryDetails[item.id] || {};
-                                                    // Calculate available stocks for this product
-                                                    const stocks = warehouseStock[item.product_id] || {}; // warehouseId -> qty
+                                                    // Calculate available stocks for this product (use UUID from join)
+                                                    const stocks = warehouseStock[item.product?.id] || {}; // warehouseId -> qty
                                                     const selectedWhStock = stocks[details.warehouseId] || 0;
                                                     const hasStockInSelected = selectedWhStock >= item.quantity;
 
