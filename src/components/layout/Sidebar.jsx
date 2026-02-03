@@ -31,6 +31,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     const navigate = useNavigate();
     const [configOpen, setConfigOpen] = useState(false);
     const [pendingCount, setPendingCount] = useState(0);
+    const [pendingPutAway, setPendingPutAway] = useState(0);
 
     // Fetch pending RRHH requests count
     useEffect(() => {
@@ -55,6 +56,33 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         return () => supabase.removeChannel(channel);
     }, []);
 
+    // Fetch pending Put Away items count
+    useEffect(() => {
+        const fetchPutAwayCount = async () => {
+            const { count } = await supabase
+                .from('view_pending_putaway')
+                .select('*', { count: 'exact', head: true })
+                .gt('pending_stock', 0);
+            setPendingPutAway(count || 0);
+        };
+        fetchPutAwayCount();
+
+        // Subscribe to movements changes (when items are received or put away)
+        const channel = supabase
+            .channel('pending_putaway')
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'movements' },
+                () => fetchPutAwayCount()
+            )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'product_locations' },
+                () => fetchPutAwayCount()
+            )
+            .subscribe();
+
+        return () => supabase.removeChannel(channel);
+    }, []);
+
     const handleSignOut = () => {
         const portalUrl = import.meta.env.VITE_PORTAL_URL || 'http://localhost:5173';
         window.location.href = portalUrl;
@@ -63,7 +91,13 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     const operationsNav = [
         { path: '/gestion/ingreso', icon: ArrowDownCircle, label: 'Recepción', color: 'text-emerald-500' },
         { path: '/gestion/salida', icon: ArrowUpCircle, label: 'Despacho', color: 'text-orange-500' },
-        { path: '/gestion/orden', icon: ClipboardList, label: 'Put Away', color: 'text-blue-500' },
+        {
+            path: '/gestion/orden',
+            icon: ClipboardList,
+            label: 'Put Away',
+            color: 'text-blue-500',
+            badge: pendingPutAway
+        },
         { path: '/gestion/traspasos', icon: ArrowRightLeft, label: 'Traspasos', color: 'text-purple-500' },
         { path: '/gestion/ajustes', icon: AlertTriangle, label: 'Ajustes / Mermas', color: 'text-red-500' },
         {
