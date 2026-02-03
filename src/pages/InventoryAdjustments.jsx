@@ -113,7 +113,7 @@ export default function InventoryAdjustments() {
         setSelectedProduct(value);
 
         if (adjustmentType === 'DECREASE') {
-            const opt = stockProducts.find(p => p.id === value);
+            const opt = stockProducts.find(p => String(p.id) === String(value));
             if (opt) {
                 setSelectedProductData({
                     id: opt.productId,
@@ -125,7 +125,8 @@ export default function InventoryAdjustments() {
                 setTargetLocation(opt.locationId);
             }
         } else {
-            const prod = allProducts.find(p => p.id === Number(value));
+            // INCREASE - buscar en catálogo completo
+            const prod = allProducts.find(p => String(p.id) === String(value));
             if (prod) {
                 setSelectedProductData({
                     id: prod.id,
@@ -207,8 +208,8 @@ export default function InventoryAdjustments() {
                     <button
                         onClick={() => setAdjustmentType('DECREASE')}
                         className={`p-5 flex items-center justify-center gap-3 transition-all ${adjustmentType === 'DECREASE'
-                                ? 'bg-red-50 text-red-600 border-b-4 border-red-500'
-                                : 'text-slate-400 hover:bg-slate-50'
+                            ? 'bg-red-50 text-red-600 border-b-4 border-red-500'
+                            : 'text-slate-400 hover:bg-slate-50'
                             }`}
                     >
                         <ArrowDownCircle size={28} />
@@ -220,8 +221,8 @@ export default function InventoryAdjustments() {
                     <button
                         onClick={() => setAdjustmentType('INCREASE')}
                         className={`p-5 flex items-center justify-center gap-3 transition-all ${adjustmentType === 'INCREASE'
-                                ? 'bg-emerald-50 text-emerald-600 border-b-4 border-emerald-500'
-                                : 'text-slate-400 hover:bg-slate-50'
+                            ? 'bg-emerald-50 text-emerald-600 border-b-4 border-emerald-500'
+                            : 'text-slate-400 hover:bg-slate-50'
                             }`}
                     >
                         <ArrowUpCircle size={28} />
@@ -391,8 +392,8 @@ export default function InventoryAdjustments() {
                             <input
                                 type="number"
                                 className={`w-full border-2 p-3 rounded-xl font-black text-2xl text-center outline-none ${adjustmentType === 'DECREASE'
-                                        ? 'border-red-200 text-red-600 focus:border-red-400'
-                                        : 'border-emerald-200 text-emerald-600 focus:border-emerald-400'
+                                    ? 'border-red-200 text-red-600 focus:border-red-400'
+                                    : 'border-emerald-200 text-emerald-600 focus:border-emerald-400'
                                     }`}
                                 placeholder="0"
                                 value={quantity}
@@ -420,8 +421,8 @@ export default function InventoryAdjustments() {
                         <div className="md:col-span-2">
                             <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Evidencia Fotográfica / Acta</label>
                             <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 cursor-pointer transition-all ${evidenceFile
-                                    ? 'bg-emerald-50 border-emerald-400'
-                                    : 'hover:bg-slate-50 border-slate-300'
+                                ? 'bg-emerald-50 border-emerald-400'
+                                : 'hover:bg-slate-50 border-slate-300'
                                 }`}>
                                 {evidenceFile
                                     ? <CheckCircle className="text-emerald-500 mb-2" size={32} />
@@ -439,8 +440,8 @@ export default function InventoryAdjustments() {
                                 onClick={handleSubmit}
                                 disabled={processing || !reason || !quantity || (adjustmentType === 'INCREASE' && !targetLocation)}
                                 className={`w-full py-4 rounded-xl font-black text-white shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${adjustmentType === 'DECREASE'
-                                        ? 'bg-red-600 hover:bg-red-700'
-                                        : 'bg-emerald-600 hover:bg-emerald-700'
+                                    ? 'bg-red-600 hover:bg-red-700'
+                                    : 'bg-emerald-600 hover:bg-emerald-700'
                                     }`}
                             >
                                 {processing ? <Loader className="animate-spin" /> : (
