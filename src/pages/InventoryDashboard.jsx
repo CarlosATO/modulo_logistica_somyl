@@ -35,12 +35,11 @@ export default function InventoryDashboard() {
         setLoading(true);
         const today = new Date().toISOString().split('T')[0];
 
-        // 1. Pending Put Away (movements with null location_id and type = INBOUND)
+        // 1. Pending Put Away (using same view as PutAway page)
         const { count: putAwayCount } = await supabase
-          .from('movements')
+          .from('view_pending_putaway')
           .select('*', { count: 'exact', head: true })
-          .eq('type', 'INBOUND')
-          .is('to_location_id', null);
+          .gt('pending_stock', 0);
 
         // 2. Today's Movements
         const { count: movementsCount } = await supabase
