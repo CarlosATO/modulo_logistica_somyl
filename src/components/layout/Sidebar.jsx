@@ -56,7 +56,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         return () => supabase.removeChannel(channel);
     }, []);
 
-    // Fetch pending Put Away items count with improved real-time updates
+    // Fetch pending Put Away items count - real-time only
     useEffect(() => {
         const fetchPutAwayCount = async () => {
             const { count } = await supabase
@@ -84,13 +84,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
             )
             .subscribe();
 
-        // Polling fallback for reliability (every 10 seconds)
-        const pollInterval = setInterval(fetchPutAwayCount, 10000);
-
-        return () => {
-            supabase.removeChannel(channel);
-            clearInterval(pollInterval);
-        };
+        return () => supabase.removeChannel(channel);
     }, []);
 
     const handleSignOut = () => {
