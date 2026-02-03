@@ -471,6 +471,21 @@ export default function InventoryViewer() {
 
                 </div>
             </div>
+
+            {/* DEBUG FOOTER (TEMPORAL) */}
+            <div className="bg-black text-green-400 p-4 text-xs font-mono overflow-auto mx-6 rounded-xl">
+                <p>DEBUG INFO:</p>
+                <p>Selected Warehouse ID: {selectedWarehouse} (Type: {typeof selectedWarehouse})</p>
+                <p>Selected Project ID: {selectedProject} (Type: {typeof selectedProject})</p>
+                <p>Selected Product ID: {selectedProduct} (Type: {typeof selectedProduct})</p>
+                {selectedProject !== 'ALL' && (
+                    <p>Target Project Found?: {projectsList.find(p => String(p.id) === String(selectedProject)) ? 'YES' + JSON.stringify(projectsList.find(p => String(p.id) === String(selectedProject))) : 'NO'}</p>
+                )}
+                <p>Projects List Count: {projectsList.length}</p>
+                <p>Movements Scanned: {movements.length}</p>
+                <p>Stock Warehouse Count: {stockByWarehouse.length}</p>
+                <p>Stock Racks Count: {stockByLocation.length}</p>
+            </div>
         </div>
     );
 }
