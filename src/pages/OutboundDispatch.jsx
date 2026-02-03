@@ -353,21 +353,33 @@ export default function OutboundDispatch() {
                 locationName: item.locationName
             }));
 
-            // Usamos la función original dispatch_materials y aseguramos tipos numéricos
+            // Mapeo inteligente de datos para usar la función existente (v1) sin modificar la BD
+            let finalReceiverName = receiver.name;
+            let finalReceiverRut = receiver.rut || '';
+            let finalReceiverStage = receiver.stage || '';
+            let finalProjectId = selectedProject ? Number(selectedProject) : null;
+
+            if (dispatchMode === 'EXTERNAL') {
+                finalReceiverName = externalCompany.name; // Guardamos Razón Social en Nombre Receptor
+                finalReceiverRut = externalCompany.rut;   // Guardamos RUT Empresa en RUT Receptor
+                finalReceiverStage = `EXTERNO: ${externalCompany.reason}`; // Guardamos motivo en Etapa/Glosa
+                // Nota: Si p_project_id es obligatorio en la BD, esto podría fallar si es null. 
+                // Si falla, el usuario deberá indicar un proyecto 'Varios' o actualizaremos la función.
+            }
+
+            // Llamada RPC compatible con la firma original
             const { error: rpcError } = await supabase.rpc('dispatch_materials', {
                 p_warehouse_id: selectedWarehouse,
-                p_project_id: selectedProject ? Number(selectedProject) : null,
+                p_project_id: finalProjectId,
                 p_document_number: folio,
-                p_receiver_name: receiver.name,
+                p_receiver_name: finalReceiverName,
                 p_user_email: user?.email,
                 p_items: itemsToProcess,
-                p_receiver_rut: receiver.rut || '',
-                p_receiver_stage: receiver.stage || '',
+                p_receiver_rut: finalReceiverRut,
+                p_receiver_stage: finalReceiverStage,
                 p_is_subcontract: dispatchMode === 'SUBCONTRACT',
-                p_provider_id: selectedProvider ? Number(selectedProvider) : null,
-                p_external_company_name: dispatchMode === 'EXTERNAL' ? externalCompany.name : null,
-                p_external_company_rut: dispatchMode === 'EXTERNAL' ? externalCompany.rut : null,
-                p_external_reason: dispatchMode === 'EXTERNAL' ? externalCompany.reason : null
+                p_provider_id: selectedProvider ? Number(selectedProvider) : null
+                // Eliminamos parámetros p_external_* que no existen en la función V1
             });
 
             if (rpcError) throw rpcError;
