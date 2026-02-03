@@ -353,11 +353,10 @@ export default function OutboundDispatch() {
                 locationName: item.locationName
             }));
 
-            // --- CORRECCIÓN CRÍTICA AQUÍ ---
-            // Usamos la función v2 y convertimos a String los campos de texto
-            const { error: rpcError } = await supabase.rpc('dispatch_materials_v2', {
+            // Usamos la función original dispatch_materials y aseguramos tipos numéricos
+            const { error: rpcError } = await supabase.rpc('dispatch_materials', {
                 p_warehouse_id: selectedWarehouse,
-                p_project_id: String(selectedProject), // <-- IMPORTANTE: String
+                p_project_id: selectedProject ? Number(selectedProject) : null,
                 p_document_number: folio,
                 p_receiver_name: receiver.name,
                 p_user_email: user?.email,
@@ -365,11 +364,10 @@ export default function OutboundDispatch() {
                 p_receiver_rut: receiver.rut || '',
                 p_receiver_stage: receiver.stage || '',
                 p_is_subcontract: dispatchMode === 'SUBCONTRACT',
-                p_provider_id: selectedProvider ? String(selectedProvider) : null,
-                p_is_external: dispatchMode === 'EXTERNAL',
-                p_external_name: externalCompany.name || null,
-                p_external_rut: externalCompany.rut || null,
-                p_external_reason: externalCompany.reason || null
+                p_provider_id: selectedProvider ? Number(selectedProvider) : null,
+                p_external_company_name: dispatchMode === 'EXTERNAL' ? externalCompany.name : null,
+                p_external_company_rut: dispatchMode === 'EXTERNAL' ? externalCompany.rut : null,
+                p_external_reason: dispatchMode === 'EXTERNAL' ? externalCompany.reason : null
             });
 
             if (rpcError) throw rpcError;
