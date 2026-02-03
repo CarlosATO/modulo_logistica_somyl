@@ -59,11 +59,24 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     // Fetch pending Put Away items count - real-time only
     useEffect(() => {
         const fetchPutAwayCount = async () => {
-            const { count } = await supabase
-                .from('view_pending_putaway')
-                .select('*', { count: 'exact', head: true })
-                .gt('pending_stock', 0);
-            setPendingPutAway(count || 0);
+            try {
+                // Query the view directly but force a fresh read
+                const { data, error } = await supabase
+                    .from('view_pending_putaway')
+                    .select('id, pending_stock')
+                    .gt('pending_stock', 0);
+
+                if (error) {
+                    console.error('Error fetching put away count:', error);
+                    setPendingPutAway(0);
+                    return;
+                }
+
+                setPendingPutAway(data?.length || 0);
+            } catch (err) {
+                console.error('Error:', err);
+                setPendingPutAway(0);
+            }
         };
         fetchPutAwayCount();
 
