@@ -212,9 +212,18 @@ const PendingRequests = () => {
         doc.setTextColor(...blueColor);
         doc.text('ACTA DE ENTREGA DE HERRAMIENTAS Y MATERIALES', 105, 50, { align: 'center' });
 
+        // Generate correlative document number: ENT-YYYYMMDDHHMMSS
+        const now = new Date();
+        const correlative = 'ENT-' + now.getFullYear() +
+            String(now.getMonth() + 1).padStart(2, '0') +
+            String(now.getDate()).padStart(2, '0') +
+            String(now.getHours()).padStart(2, '0') +
+            String(now.getMinutes()).padStart(2, '0') +
+            String(now.getSeconds()).padStart(2, '0');
+
         doc.setTextColor(0);
         doc.setFontSize(11);
-        doc.text('Documento N°: S/N', 105, 57, { align: 'center' });
+        doc.text(`Documento N°: ${correlative}`, 105, 57, { align: 'center' });
 
         // INFO BLOCK
         doc.setFillColor(240, 248, 255); // Light Blue bg
@@ -258,7 +267,7 @@ const PendingRequests = () => {
             return [
                 item.product?.name || item.product_code,
                 item.quantity,
-                'Sin observaciones', // Could add inputs for this later
+                details.observations || 'Sin observaciones',
                 `$${unitPrice.toLocaleString('es-CL')}`,
                 `$${total.toLocaleString('es-CL')}`
             ];
@@ -597,13 +606,25 @@ const PendingRequests = () => {
                                                             </div>
 
                                                             {/* Price Input */}
-                                                            <div className="md:col-span-2">
-                                                                <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Costo Unit $</label>
+                                                            <div className="md:col-span-1">
+                                                                <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Costo $</label>
                                                                 <input
                                                                     type="number"
                                                                     className="w-full text-sm border border-slate-200 rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-200 text-right font-mono"
                                                                     value={details.price}
                                                                     onChange={e => handleDetailChange(item.id, 'price', e.target.value)}
+                                                                />
+                                                            </div>
+
+                                                            {/* Observations Input */}
+                                                            <div className="md:col-span-3">
+                                                                <label className="text-xs font-bold text-slate-400 uppercase block mb-1">Observaciones</label>
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="Estado, ID, Notas..."
+                                                                    className="w-full text-sm border border-slate-200 rounded-lg p-2 outline-none focus:ring-2 focus:ring-indigo-200"
+                                                                    value={details.observations || ''}
+                                                                    onChange={e => handleDetailChange(item.id, 'observations', e.target.value)}
                                                                 />
                                                             </div>
 
