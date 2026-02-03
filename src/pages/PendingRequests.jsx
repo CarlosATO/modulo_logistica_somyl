@@ -60,26 +60,21 @@ const PendingRequests = () => {
                 setEmployees(empMap);
             }
 
-            // 3. Fetch Stock per Warehouse (Calculated from Movements)
-            const productIds = [...new Set(reqs.map(r => r.product_id || r.product?.id))].filter(Boolean); // Ensure IDs
+            // 3. Fetch Stock per Warehouse (From product_locations - physical stock)
+            const productIds = [...new Set(reqs.map(r => r.product_id || r.product?.id))].filter(Boolean);
             if (productIds.length > 0) {
-                const { data: movs } = await supabase
-                    .from('movements')
-                    .select('product_id, warehouse_id, type, quantity')
-                    .in('product_id', productIds);
+                const { data: stockData } = await supabase
+                    .from('product_locations')
+                    .select('product_id, warehouse_id, quantity')
+                    .in('product_id', productIds)
+                    .gt('quantity', 0);
 
-                if (movs) {
+                if (stockData) {
                     const stockMap = {}; // { prodId: { whId: qty } }
-                    movs.forEach(m => {
-                        if (!stockMap[m.product_id]) stockMap[m.product_id] = {};
-                        if (!stockMap[m.product_id][m.warehouse_id]) stockMap[m.product_id][m.warehouse_id] = 0;
-
-                        const qty = Number(m.quantity);
-                        if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') {
-                            stockMap[m.product_id][m.warehouse_id] += qty;
-                        } else if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') {
-                            stockMap[m.product_id][m.warehouse_id] -= qty;
-                        }
+                    stockData.forEach(s => {
+                        if (!stockMap[s.product_id]) stockMap[s.product_id] = {};
+                        if (!stockMap[s.product_id][s.warehouse_id]) stockMap[s.product_id][s.warehouse_id] = 0;
+                        stockMap[s.product_id][s.warehouse_id] += Number(s.quantity);
                     });
                     setWarehouseStock(stockMap);
                 }
