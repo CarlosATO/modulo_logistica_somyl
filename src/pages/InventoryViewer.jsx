@@ -84,6 +84,7 @@ export default function InventoryViewer() {
 
     // --- LÓGICA 1: STOCK GLOBAL (FILTRADO POR PROYECTO) ---
     // --- LÓGICA 1: STOCK GLOBAL (FILTRADO POR PROYECTO) ---
+    // --- LÓGICA 1: STOCK GLOBAL (FILTRADO POR PROYECTO) ---
     const stockByWarehouse = useMemo(() => {
         const stockMap = {};
 
@@ -93,8 +94,8 @@ export default function InventoryViewer() {
             : null;
 
         movements.forEach(m => {
-            // 1. Filtro de Bodega
-            if (selectedWarehouse !== 'ALL' && m.warehouse_id !== selectedWarehouse) return;
+            // 1. Filtro de Bodega (Hardened comparison)
+            if (selectedWarehouse !== 'ALL' && String(m.warehouse_id) !== String(selectedWarehouse)) return;
 
             // 2. Filtro de Proyecto
             if (selectedProject !== 'ALL' && targetProject) {
@@ -139,7 +140,8 @@ export default function InventoryViewer() {
     // --- LÓGICA 2: POR UBICACIÓN (Físico) ---
     const stockByLocation = useMemo(() => {
         return stockInRacks.filter(item => {
-            const matchWh = selectedWarehouse === 'ALL' || item.warehouse_id === selectedWarehouse;
+            // Filtro Bodega (Hardened)
+            const matchWh = selectedWarehouse === 'ALL' || String(item.warehouse_id) === String(selectedWarehouse);
             if (!matchWh) return false;
 
             // Filtro estricto por producto seleccionado
