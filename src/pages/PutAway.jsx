@@ -14,12 +14,14 @@ const PutAway = () => {
     const navigate = useNavigate();
 
     const [warehouses, setWarehouses] = useState([]);
+    const [warehouseCounts, setWarehouseCounts] = useState({}); // { warehouseId: count }
     const [selectedWarehouse, setSelectedWarehouse] = useState('');
 
     // Listas de datos
     const [stagingItems, setStagingItems] = useState([]);
     const [locations, setLocations] = useState([]);
     const [loadingItems, setLoadingItems] = useState(false);
+    const [loadingCounts, setLoadingCounts] = useState(true);
     const [errorMsg, setErrorMsg] = useState(null);
 
     // Estado de la acción
@@ -27,12 +29,35 @@ const PutAway = () => {
     const [targetLocation, setTargetLocation] = useState('');
     const [moveQty, setMoveQty] = useState('');
 
-    // 1. Cargar Bodegas
+    // 1. Cargar Bodegas y sus conteos de pendientes
     useEffect(() => {
         const load = async () => {
-            const { data } = await supabase.from('warehouses').select('*').eq('is_active', true).order('name');
-            setWarehouses(data || []);
-            if (data && data.length > 0) setSelectedWarehouse(data[0].id);
+            setLoadingCounts(true);
+            // Cargar bodegas
+            const { data: whs } = await supabase.from('warehouses').select('*').eq('is_active', true).order('name');
+            setWarehouses(whs || []);
+
+            // Cargar conteo de pendientes por bodega
+            const { data: pending } = await supabase
+                .from('view_pending_putaway')
+                .select('warehouse_id, pending_stock')
+                .gt('pending_stock', 0);
+
+            // Agrupar por warehouse_id
+            const counts = {};
+            (pending || []).forEach(item => {
+                counts[item.warehouse_id] = (counts[item.warehouse_id] || 0) + 1;
+            });
+            setWarehouseCounts(counts);
+            setLoadingCounts(false);
+
+            // Auto-seleccionar bodega con pendientes, o la primera
+            const warehouseWithPending = whs?.find(w => counts[w.id] > 0);
+            if (warehouseWithPending) {
+                setSelectedWarehouse(warehouseWithPending.id);
+            } else if (whs?.length > 0) {
+                setSelectedWarehouse(whs[0].id);
+            }
         };
         load();
     }, []);
@@ -150,7 +175,7 @@ const PutAway = () => {
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
 
-            {/* PASO 1: SELECTOR BODEGA */}
+            {/* PASO 1: SELECTOR BODEGA CON CONTEO */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -166,13 +191,41 @@ const PutAway = () => {
                         </button>
                     </div>
                 </div>
-                <div className="mt-4">
-                    <Combobox
-                        options={warehouses}
-                        value={selectedWarehouse}
-                        onChange={setSelectedWarehouse}
-                        placeholder="-- Seleccionar Bodega --"
-                    />
+
+                {/* WAREHOUSE SELECTOR CARDS */}
+                <div className="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {loadingCounts ? (
+                        <div className="col-span-full text-center py-4 text-slate-400">
+                            <Loader className="animate-spin mx-auto" size={24} />
+                        </div>
+                    ) : warehouses.map(wh => {
+                        const count = warehouseCounts[wh.id] || 0;
+                        const isSelected = selectedWarehouse === wh.id;
+                        return (
+                            <button
+                                key={wh.id}
+                                onClick={() => setSelectedWarehouse(wh.id)}
+                                className={`p-4 rounded-xl border-2 text-left transition-all relative ${isSelected
+                                        ? 'border-blue-500 bg-blue-50'
+                                        : count > 0
+                                            ? 'border-orange-300 bg-orange-50 hover:border-orange-400'
+                                            : 'border-slate-200 hover:border-slate-300'
+                                    }`}
+                            >
+                                <Warehouse size={20} className={isSelected ? 'text-blue-600' : count > 0 ? 'text-orange-500' : 'text-slate-400'} />
+                                <span className={`block font-bold mt-1 ${isSelected ? 'text-blue-700' : count > 0 ? 'text-orange-700' : 'text-slate-700'
+                                    }`}>{wh.name}</span>
+                                {count > 0 && (
+                                    <span className="absolute -top-2 -right-2 bg-orange-500 text-white text-xs font-black w-6 h-6 rounded-full flex items-center justify-center shadow-lg animate-pulse">
+                                        {count}
+                                    </span>
+                                )}
+                                {count === 0 && (
+                                    <span className="text-xs text-slate-400 mt-1">Sin pendientes</span>
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
             </div>
 
@@ -217,8 +270,8 @@ const PutAway = () => {
                                         key={item.id}
                                         onClick={() => handleSelectItem(item)}
                                         className={`bg-white p-4 rounded-xl border-2 cursor-pointer transition-all ${selectedItem?.id === item.id
-                                                ? 'border-blue-500 ring-4 ring-blue-100 shadow-lg'
-                                                : 'border-transparent hover:border-blue-200 hover:shadow-md'
+                                            ? 'border-blue-500 ring-4 ring-blue-100 shadow-lg'
+                                            : 'border-transparent hover:border-blue-200 hover:shadow-md'
                                             }`}
                                     >
                                         <div className="flex justify-between items-center">
