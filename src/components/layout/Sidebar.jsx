@@ -56,7 +56,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         return () => supabase.removeChannel(channel);
     }, []);
 
-    // Fetch pending Put Away items count
+    // Fetch pending Put Away items count with improved real-time updates
     useEffect(() => {
         const fetchPutAwayCount = async () => {
             const { count } = await supabase
@@ -67,9 +67,9 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         };
         fetchPutAwayCount();
 
-        // Subscribe to movements changes (when items are received or put away)
+        // Subscribe to all relevant table changes
         const channel = supabase
-            .channel('pending_putaway')
+            .channel('pending_putaway_updates')
             .on('postgres_changes',
                 { event: '*', schema: 'public', table: 'movements' },
                 () => fetchPutAwayCount()
@@ -78,9 +78,19 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
                 { event: '*', schema: 'public', table: 'product_locations' },
                 () => fetchPutAwayCount()
             )
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'products' },
+                () => fetchPutAwayCount()
+            )
             .subscribe();
 
-        return () => supabase.removeChannel(channel);
+        // Polling fallback for reliability (every 10 seconds)
+        const pollInterval = setInterval(fetchPutAwayCount, 10000);
+
+        return () => {
+            supabase.removeChannel(channel);
+            clearInterval(pollInterval);
+        };
     }, []);
 
     const handleSignOut = () => {
