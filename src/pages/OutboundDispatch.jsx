@@ -4,7 +4,7 @@ import { supabaseProcurement, getProveedores } from '../services/procurementClie
 import { useAuth } from '../context/AuthContext';
 import {
     Search, ArrowRight, Truck, User, FileText,
-    MapPin, Package, X, CheckCircle, Loader, Briefcase, Plus, AlertCircle, Users
+    MapPin, Package, X, CheckCircle, Loader, Briefcase, Plus, AlertCircle, Users, Building2, Upload
 } from 'lucide-react';
 import GoogleSearchBar from '../components/GoogleSearchBar';
 import Combobox from '../components/Combobox';
@@ -32,16 +32,28 @@ const DispatchDocument = ({ data }) => (
     <Document>
         <Page size="A4" style={styles.page}>
             <View style={styles.header}>
-                <View><Text style={styles.title}>GUÍA DE DESPACHO</Text><Text style={styles.subtitle}>Folio: {data.folio}</Text></View>
+                <View>
+                    <Text style={styles.title}>
+                        {data.isExternal ? 'GUÍA DE TRANSFERENCIA EXTERNA' : 'GUÍA DE DESPACHO'}
+                    </Text>
+                    <Text style={styles.subtitle}>Folio: {data.folio}</Text>
+                </View>
                 <View style={{ alignItems: 'flex-end' }}><Text style={styles.subtitle}>{new Date().toLocaleDateString()}</Text></View>
             </View>
             <View style={{ flexDirection: 'row', gap: 10 }}>
                 <View style={[styles.section, { flex: 1 }]}><Text style={styles.label}>Origen</Text><Text style={styles.value}>{data.warehouseName}</Text></View>
                 <View style={[styles.section, { flex: 1 }]}>
-                    <Text style={styles.label}>Destino / Proyecto</Text>
+                    <Text style={styles.label}>{data.isExternal ? 'Destino Externo' : 'Destino / Proyecto'}</Text>
                     <Text style={styles.value}>{data.projectName}</Text>
-                    <Text style={{ fontSize: 9, marginTop: 2 }}>{data.stage}</Text>
-                    {/* MOSTRAR QUIÉN RECIBE SI ES SUBCONTRATO */}
+                    {data.isExternal && data.externalCompany && (
+                        <>
+                            <Text style={{ fontSize: 9, marginTop: 2 }}>RUT: {data.externalCompany.rut}</Text>
+                            <Text style={{ fontSize: 9, marginTop: 4, color: '#7c3aed', fontWeight: 'bold' }}>
+                                MOTIVO: {data.externalCompany.reason || 'Transferencia externa'}
+                            </Text>
+                        </>
+                    )}
+                    {!data.isExternal && <Text style={{ fontSize: 9, marginTop: 2 }}>{data.stage}</Text>}
                     {data.isSubcontract && (
                         <Text style={{ fontSize: 9, marginTop: 4, color: '#4f46e5', fontWeight: 'bold' }}>
                             ENTREGADO A: {data.providerName || 'CONTRATISTA'}
@@ -56,7 +68,9 @@ const DispatchDocument = ({ data }) => (
                     <View key={i} style={styles.tableRow}><Text style={styles.col1}>{item.code}</Text><Text style={styles.col2}>{item.name}</Text><Text style={styles.col3}>{item.locationName}</Text><Text style={styles.col4}>{item.quantity}</Text></View>
                 ))}
             </View>
-            <Text style={styles.footer}>Sistema Somyl - {data.id} - {data.isSubcontract ? 'Cargo a Subcontrato' : 'Consumo Interno'}</Text>
+            <Text style={styles.footer}>
+                Sistema Somyl - {data.id} - {data.isExternal ? 'Transferencia Externa' : (data.isSubcontract ? 'Cargo a Subcontrato' : 'Consumo Interno')}
+            </Text>
         </Page>
     </Document>
 );
@@ -78,9 +92,11 @@ export default function OutboundDispatch() {
     const [projectClient, setProjectClient] = useState('');
     const [receiver, setReceiver] = useState({ name: '', rut: '', plate: '', stage: '' });
 
-    // Switch Subcontrato
-    const [isSubcontract, setIsSubcontract] = useState(false);
+    // Dispatch Mode: 'DIRECT' | 'SUBCONTRACT' | 'EXTERNAL'
+    const [dispatchMode, setDispatchMode] = useState('DIRECT');
     const [selectedProvider, setSelectedProvider] = useState('');
+    const [externalCompany, setExternalCompany] = useState({ name: '', rut: '', reason: '' });
+    const [signedDocFile, setSignedDocFile] = useState(null);
 
     // Picking
     const [searchResults, setSearchResults] = useState([]);
@@ -304,7 +320,8 @@ export default function OutboundDispatch() {
     const handleDispatch = async () => {
         if (!selectedWarehouse) return toast.error("⚠️ Selecciona la Bodega de Origen.");
         if (!selectedProject) return toast.error("⚠️ Selecciona el Proyecto de Destino.");
-        if (isSubcontract && !selectedProvider) return toast.error("⚠️ Selecciona el Subcontrato/Cuadrilla.");
+        if (dispatchMode === 'SUBCONTRACT' && !selectedProvider) return toast.error("⚠️ Selecciona el Subcontrato/Cuadrilla.");
+        if (dispatchMode === 'EXTERNAL' && !externalCompany.name) return toast.error("⚠️ Ingresa la Razón Social del tercero.");
         if (!receiver.name) return toast.error("⚠️ Falta el nombre del Receptor.");
         if (cart.length === 0) return toast.warning("⚠️ El carrito está vacío.");
 
@@ -334,8 +351,12 @@ export default function OutboundDispatch() {
                 p_items: itemsToProcess,
                 p_receiver_rut: receiver.rut || '',
                 p_receiver_stage: receiver.stage || '',
-                p_is_subcontract: isSubcontract,
-                p_provider_id: selectedProvider ? String(selectedProvider) : null // <-- IMPORTANTE: String
+                p_is_subcontract: dispatchMode === 'SUBCONTRACT',
+                p_provider_id: selectedProvider ? String(selectedProvider) : null,
+                p_is_external: dispatchMode === 'EXTERNAL',
+                p_external_name: externalCompany.name || null,
+                p_external_rut: externalCompany.rut || null,
+                p_external_reason: externalCompany.reason || null
             });
 
             if (rpcError) throw rpcError;
@@ -356,23 +377,27 @@ export default function OutboundDispatch() {
 
             const whName = warehouses.find(w => w.id === selectedWarehouse)?.name;
             const prj = projects.find(p => p.id === Number(selectedProject));
-            const providerName = isSubcontract ? providers.find(p => p.id === Number(selectedProvider))?.nombre : null;
+            const providerName = dispatchMode === 'SUBCONTRACT' ? providers.find(p => p.id === Number(selectedProvider))?.nombre : null;
 
             setLastDispatchData({
                 id: folio, folio, warehouseName: whName,
-                projectName: prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo',
+                projectName: dispatchMode === 'EXTERNAL' ? externalCompany.name : (prj ? `${prj.proyecto} (${prj.cliente})` : 'Externo'),
                 stage: receiver.stage,
                 receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
                 items: cart,
-                isSubcontract,
-                providerName
+                dispatchMode,
+                isSubcontract: dispatchMode === 'SUBCONTRACT',
+                isExternal: dispatchMode === 'EXTERNAL',
+                providerName,
+                externalCompany: dispatchMode === 'EXTERNAL' ? externalCompany : null
             });
 
             setCart([]);
             setReceiver({ name: '', rut: '', plate: '', stage: '' });
             setPdfDownloaded(false);
-            setIsSubcontract(false);
+            setDispatchMode('DIRECT');
             setSelectedProvider('');
+            setExternalCompany({ name: '', rut: '', reason: '' });
             toast.success(`✅ Despacho ${folio} completado con éxito.`);
 
         } catch (err) {
@@ -385,19 +410,21 @@ export default function OutboundDispatch() {
 
     const handlePdfDownloaded = () => setPdfDownloaded(true);
 
-    // Preview Data
     const selectedProj = projects.find(p => p.id === Number(selectedProject));
-    const providerNamePreview = isSubcontract ? providers.find(p => p.id === Number(selectedProvider))?.nombre : null;
+    const providerNamePreview = dispatchMode === 'SUBCONTRACT' ? providers.find(p => p.id === Number(selectedProvider))?.nombre : null;
 
     const pdfPreviewData = {
         id: 'PREVIEW', folio: 'PREVIEW',
         warehouseName: warehouses.find(w => w.id === selectedWarehouse)?.name || '',
-        projectName: selectedProj ? `${selectedProj.proyecto} (${selectedProj.cliente})` : 'Cargando...',
+        projectName: dispatchMode === 'EXTERNAL' ? externalCompany.name || 'Tercero Externo' : (selectedProj ? `${selectedProj.proyecto} (${selectedProj.cliente})` : 'Cargando...'),
         stage: receiver.stage,
         receiverName: receiver.name, receiverRut: receiver.rut, receiverPlate: receiver.plate,
         items: cart,
-        isSubcontract,
-        providerName: providerNamePreview
+        dispatchMode,
+        isSubcontract: dispatchMode === 'SUBCONTRACT',
+        isExternal: dispatchMode === 'EXTERNAL',
+        providerName: providerNamePreview,
+        externalCompany: dispatchMode === 'EXTERNAL' ? externalCompany : null
     };
 
     return (
@@ -430,30 +457,56 @@ export default function OutboundDispatch() {
                 </div>
             </div>
 
-            {/* PASO 2: SUBCONTRATO */}
+            {/* PASO 2: TIPO DE DESTINO */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-orange-100 rounded-lg flex items-center justify-center text-orange-600 font-bold text-sm">2</div>
-                        <h3 className="font-bold text-slate-800 flex items-center gap-2"><Users size={18} /> Asignación a Subcontrato</h3>
-                    </div>
-
-                    {/* SWITCH SUBCONTRATO */}
-                    <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border">
-                        <span className={`text-xs font-bold ${!isSubcontract ? 'text-slate-600' : 'text-slate-400'}`}>Directo</span>
-                        <div
-                            onClick={() => { setIsSubcontract(!isSubcontract); setSelectedProvider(''); }}
-                            className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-all ${isSubcontract ? 'bg-indigo-600' : 'bg-slate-300'}`}
-                        >
-                            <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${isSubcontract ? 'translate-x-6' : 'translate-x-0'}`}></div>
-                        </div>
-                        <span className={`text-xs font-bold ${isSubcontract ? 'text-indigo-600' : 'text-slate-400'}`}>Subcontrato</span>
-                    </div>
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="w-8 h-8 bg-orange-100 rounded-lg flex items-center justify-center text-orange-600 font-bold text-sm">2</div>
+                    <h3 className="font-bold text-slate-800">Tipo de Destino</h3>
                 </div>
 
-                {isSubcontract && (
-                    <div className="animate-in fade-in slide-in-from-top-2 duration-300 pt-2">
-                        <label className="block text-xs font-bold text-indigo-600 uppercase mb-2">Seleccionar Cuadrilla / Empresa</label>
+                {/* MODE SELECTOR */}
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                    <button
+                        onClick={() => { setDispatchMode('DIRECT'); setSelectedProvider(''); setExternalCompany({ name: '', rut: '', reason: '' }); }}
+                        className={`p-4 rounded-xl border-2 text-center transition-all ${dispatchMode === 'DIRECT'
+                            ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                            : 'border-slate-200 hover:border-emerald-300 text-slate-600'
+                            }`}
+                    >
+                        <Truck size={24} className="mx-auto mb-2" />
+                        <span className="font-bold text-sm">Directo</span>
+                        <p className="text-xs text-slate-500 mt-1">Consumo interno</p>
+                    </button>
+
+                    <button
+                        onClick={() => { setDispatchMode('SUBCONTRACT'); setExternalCompany({ name: '', rut: '', reason: '' }); }}
+                        className={`p-4 rounded-xl border-2 text-center transition-all ${dispatchMode === 'SUBCONTRACT'
+                            ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                            : 'border-slate-200 hover:border-indigo-300 text-slate-600'
+                            }`}
+                    >
+                        <Users size={24} className="mx-auto mb-2" />
+                        <span className="font-bold text-sm">Subcontrato</span>
+                        <p className="text-xs text-slate-500 mt-1">Cargo a contratista</p>
+                    </button>
+
+                    <button
+                        onClick={() => { setDispatchMode('EXTERNAL'); setSelectedProvider(''); }}
+                        className={`p-4 rounded-xl border-2 text-center transition-all ${dispatchMode === 'EXTERNAL'
+                            ? 'border-purple-500 bg-purple-50 text-purple-700'
+                            : 'border-slate-200 hover:border-purple-300 text-slate-600'
+                            }`}
+                    >
+                        <Building2 size={24} className="mx-auto mb-2" />
+                        <span className="font-bold text-sm">Externo</span>
+                        <p className="text-xs text-slate-500 mt-1">Tercero / Devolución</p>
+                    </button>
+                </div>
+
+                {/* SUBCONTRACT FORM */}
+                {dispatchMode === 'SUBCONTRACT' && (
+                    <div className="animate-in fade-in slide-in-from-top-2 duration-300 pt-2 border-t">
+                        <label className="block text-xs font-bold text-indigo-600 uppercase mb-2 mt-4">Seleccionar Cuadrilla / Empresa</label>
                         <Combobox
                             options={providers.map(p => ({ id: p.id, name: p.nombre, subtitle: p.rut }))}
                             value={selectedProvider}
@@ -461,7 +514,41 @@ export default function OutboundDispatch() {
                             placeholder="-- Buscar Contratista --"
                         />
                         <div className="mt-2 text-xs text-slate-400 flex items-center gap-1">
-                            <AlertCircle size={12} /> El material se descontará del inventario y se cargará a la cuenta de este contratista.
+                            <AlertCircle size={12} /> El material se cargará a la cuenta de este contratista.
+                        </div>
+                    </div>
+                )}
+
+                {/* EXTERNAL COMPANY FORM */}
+                {dispatchMode === 'EXTERNAL' && (
+                    <div className="animate-in fade-in slide-in-from-top-2 duration-300 pt-2 border-t">
+                        <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 mt-4">
+                            <h4 className="font-bold text-purple-800 mb-3 flex items-center gap-2">
+                                <Building2 size={16} /> Datos del Tercero Externo
+                            </h4>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <input
+                                    className="border border-purple-200 p-3 rounded-xl bg-white focus:border-purple-400 outline-none"
+                                    placeholder="Razón Social *"
+                                    value={externalCompany.name}
+                                    onChange={e => setExternalCompany({ ...externalCompany, name: e.target.value })}
+                                />
+                                <input
+                                    className="border border-purple-200 p-3 rounded-xl bg-white focus:border-purple-400 outline-none"
+                                    placeholder="RUT *"
+                                    value={externalCompany.rut}
+                                    onChange={e => setExternalCompany({ ...externalCompany, rut: e.target.value })}
+                                />
+                                <input
+                                    className="border border-purple-200 p-3 rounded-xl bg-white focus:border-purple-400 outline-none"
+                                    placeholder="Motivo (ej: Devolución parcial)"
+                                    value={externalCompany.reason}
+                                    onChange={e => setExternalCompany({ ...externalCompany, reason: e.target.value })}
+                                />
+                            </div>
+                            <div className="mt-2 text-xs text-purple-600 flex items-center gap-1">
+                                <AlertCircle size={12} /> Esta transferencia no afecta proyectos ni subcontratos internos.
+                            </div>
                         </div>
                     </div>
                 )}
@@ -550,8 +637,8 @@ export default function OutboundDispatch() {
                                 )}
                                 <button
                                     onClick={handleDispatch}
-                                    disabled={isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name || (isSubcontract && !selectedProvider)}
-                                    className={`px-8 py-3 rounded-xl font-black shadow-lg flex items-center gap-2 transition-all ${(isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name || (isSubcontract && !selectedProvider)) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105 active:scale-95'}`}
+                                    disabled={isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name || (dispatchMode === 'SUBCONTRACT' && !selectedProvider) || (dispatchMode === 'EXTERNAL' && !externalCompany.name)}
+                                    className={`px-8 py-3 rounded-xl font-black shadow-lg flex items-center gap-2 transition-all ${(isProcessing || cart.length === 0 || !pdfDownloaded || !receiver.name || (dispatchMode === 'SUBCONTRACT' && !selectedProvider) || (dispatchMode === 'EXTERNAL' && !externalCompany.name)) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 hover:scale-105 active:scale-95'}`}
                                 >
                                     {isProcessing ? <Loader className="animate-spin" /> : <><CheckCircle size={18} /> Confirmar Despacho</>}
                                 </button>
