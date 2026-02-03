@@ -28,52 +28,57 @@ const styles = StyleSheet.create({
 });
 
 // --- DOCUMENTO PDF ---
-const DispatchDocument = ({ data }) => (
-    <Document>
-        <Page size="A4" style={styles.page}>
-            <View style={styles.header}>
-                <View>
-                    <Text style={styles.title}>
-                        {data.isExternal ? 'GUÍA DE TRANSFERENCIA EXTERNA' : 'GUÍA DE DESPACHO'}
-                    </Text>
-                    <Text style={styles.subtitle}>Folio: {data.folio}</Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}><Text style={styles.subtitle}>{new Date().toLocaleDateString()}</Text></View>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-                <View style={[styles.section, { flex: 1 }]}><Text style={styles.label}>Origen</Text><Text style={styles.value}>{data.warehouseName}</Text></View>
-                <View style={[styles.section, { flex: 1 }]}>
-                    <Text style={styles.label}>{data.isExternal ? 'Destino Externo' : 'Destino / Proyecto'}</Text>
-                    <Text style={styles.value}>{data.projectName}</Text>
-                    {data.isExternal && data.externalCompany && (
-                        <>
-                            <Text style={{ fontSize: 9, marginTop: 2 }}>RUT: {data.externalCompany.rut}</Text>
-                            <Text style={{ fontSize: 9, marginTop: 4, color: '#7c3aed', fontWeight: 'bold' }}>
-                                MOTIVO: {data.externalCompany.reason || 'Transferencia externa'}
-                            </Text>
-                        </>
-                    )}
-                    {!data.isExternal && <Text style={{ fontSize: 9, marginTop: 2 }}>{data.stage}</Text>}
-                    {data.isSubcontract && (
-                        <Text style={{ fontSize: 9, marginTop: 4, color: '#4f46e5', fontWeight: 'bold' }}>
-                            ENTREGADO A: {data.providerName || 'CONTRATISTA'}
+const DispatchDocument = ({ data }) => {
+    // Validación defensiva
+    const items = data?.items || [];
+
+    return (
+        <Document>
+            <Page size="A4" style={styles.page}>
+                <View style={styles.header}>
+                    <View>
+                        <Text style={styles.title}>
+                            {data?.isExternal ? 'GUÍA DE TRANSFERENCIA EXTERNA' : 'GUÍA DE DESPACHO'}
                         </Text>
-                    )}
+                        <Text style={styles.subtitle}>Folio: {data?.folio || 'N/A'}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}><Text style={styles.subtitle}>{new Date().toLocaleDateString()}</Text></View>
                 </View>
-            </View>
-            <View style={styles.section}><Text style={styles.label}>Receptor (Firma)</Text><Text style={styles.value}>{data.receiverName} | RUT: {data.receiverRut}</Text></View>
-            <View style={styles.table}>
-                <View style={styles.tableHeader}><Text style={styles.col1}>COD</Text><Text style={styles.col2}>DESC</Text><Text style={styles.col3}>UBICACIÓN</Text><Text style={styles.col4}>CANT</Text></View>
-                {data.items.map((item, i) => (
-                    <View key={i} style={styles.tableRow}><Text style={styles.col1}>{item.code}</Text><Text style={styles.col2}>{item.name}</Text><Text style={styles.col3}>{item.locationName}</Text><Text style={styles.col4}>{item.quantity}</Text></View>
-                ))}
-            </View>
-            <Text style={styles.footer}>
-                Sistema Somyl - {data.id} - {data.isExternal ? 'Transferencia Externa' : (data.isSubcontract ? 'Cargo a Subcontrato' : 'Consumo Interno')}
-            </Text>
-        </Page>
-    </Document>
-);
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <View style={[styles.section, { flex: 1 }]}><Text style={styles.label}>Origen</Text><Text style={styles.value}>{data?.warehouseName || 'N/A'}</Text></View>
+                    <View style={[styles.section, { flex: 1 }]}>
+                        <Text style={styles.label}>{data?.isExternal ? 'Destino Externo' : 'Destino / Proyecto'}</Text>
+                        <Text style={styles.value}>{data?.projectName || 'N/A'}</Text>
+                        {data?.isExternal && data?.externalCompany && (
+                            <>
+                                <Text style={{ fontSize: 9, marginTop: 2 }}>RUT: {data.externalCompany.rut}</Text>
+                                <Text style={{ fontSize: 9, marginTop: 4, color: '#7c3aed', fontWeight: 'bold' }}>
+                                    MOTIVO: {data.externalCompany.reason || 'Transferencia externa'}
+                                </Text>
+                            </>
+                        )}
+                        {!data?.isExternal && <Text style={{ fontSize: 9, marginTop: 2 }}>{data?.stage || ''}</Text>}
+                        {data?.isSubcontract && (
+                            <Text style={{ fontSize: 9, marginTop: 4, color: '#4f46e5', fontWeight: 'bold' }}>
+                                ENTREGADO A: {data?.providerName || 'CONTRATISTA'}
+                            </Text>
+                        )}
+                    </View>
+                </View>
+                <View style={styles.section}><Text style={styles.label}>Receptor (Firma)</Text><Text style={styles.value}>{data?.receiverName || 'N/A'} | RUT: {data?.receiverRut || 'N/A'}</Text></View>
+                <View style={styles.table}>
+                    <View style={styles.tableHeader}><Text style={styles.col1}>COD</Text><Text style={styles.col2}>DESC</Text><Text style={styles.col3}>UBICACIÓN</Text><Text style={styles.col4}>CANT</Text></View>
+                    {items.map((item, i) => (
+                        <View key={i} style={styles.tableRow}><Text style={styles.col1}>{item.code}</Text><Text style={styles.col2}>{item.name}</Text><Text style={styles.col3}>{item.locationName}</Text><Text style={styles.col4}>{item.quantity}</Text></View>
+                    ))}
+                </View>
+                <Text style={styles.footer}>
+                    Sistema Somyl - {data?.id || 'N/A'} - {data?.isExternal ? 'Transferencia Externa' : (data?.isSubcontract ? 'Cargo a Subcontrato' : 'Consumo Interno')}
+                </Text>
+            </Page>
+        </Document>
+    );
+};
 
 export default function OutboundDispatch() {
     const { user } = useAuth();
