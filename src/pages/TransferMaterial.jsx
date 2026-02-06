@@ -1,385 +1,342 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { supabaseProcurement } from '../services/procurementClient';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import Combobox from '../components/Combobox';
-import { PDFDownloadLink, pdf } from '@react-pdf/renderer'; 
-import TransferPDF from '../components/TransferPDF'; 
-import { 
-  ArrowRightLeft, Building2, UserCheck, Search, Trash2, 
-  Save, FileText, X, MapPin, Loader, Hash
+import { PDFDownloadLink } from '@react-pdf/renderer';
+import TransferPDF from '../components/TransferPDF';
+import CreateTransferModal from './CreateTransferModal';
+import {
+    ArrowRightLeft, Search, Plus, FileText, X,
+    Calendar, User, MapPin, ChevronRight, Loader, History
 } from 'lucide-react';
 
 export default function TransferMaterial() {
-  const { user } = useAuth();
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
-  
-  // Datos Maestros
-  const [warehouses, setWarehouses] = useState([]);
-  const [projects, setProjects] = useState([]); 
-  const [products, setProducts] = useState([]); 
-  
-  // --- MEJORA: Correlativo Secuencial ---
-  const [nextTransferId, setNextTransferId] = useState('');
+    const { user } = useAuth();
+    const navigate = useNavigate();
+    const [loading, setLoading] = useState(false);
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedProductForModal, setSelectedProductForModal] = useState(null);
-  const [locationsForProduct, setLocationsForProduct] = useState([]); 
+    // Data State
+    const [transfers, setTransfers] = useState([]);
+    const [warehouses, setWarehouses] = useState([]);
 
-  const [formData, setFormData] = useState({
-    originWarehouse: '',
-    destinationWarehouse: '',
-    originProjectId: '',     
-    destinationProjectId: '', 
-    authorizedBy: '',
-  });
+    // UI State
+    const [searchTerm, setSearchTerm] = useState('');
+    const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-  const [cart, setCart] = useState([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [lastTransferData, setLastTransferData] = useState(null); 
+    // Drawer State
+    const [selectedTransfer, setSelectedTransfer] = useState(null);
+    const [transferDetails, setTransferDetails] = useState([]);
+    const [loadingDetails, setLoadingDetails] = useState(false);
 
-  // Función para obtener el siguiente folio correlativo
-  const fetchNextFolio = async () => {
-    try {
-        // Contamos cuántos registros hay en la tabla transfers
-        const { count, error } = await supabase
-            .from('transfers')
-            .select('*', { count: 'exact', head: true });
+    // Initial Load
+    const fetchTransfers = async () => {
+        setLoading(true);
+        try {
+            const { data, error } = await supabase
+                .from('transfers')
+                .select('*')
+                .order('created_at', { ascending: false });
 
-        if (error) throw error;
-        
-        // Iniciamos desde 0 como solicitaste
-        setNextTransferId(`TRF-${count || 0}`);
-    } catch (error) {
-        console.error("Error obteniendo correlativo:", error);
-        setNextTransferId(`TRF-ERR`);
-    }
-  };
+            if (error) throw error;
+            setTransfers(data || []);
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        // Cargar el folio inicial
-        await fetchNextFolio();
+            // Also load warehouses for name mapping if needed (though table has IDs, we might want names if not stored)
+            // actually looking at the CreateModal, we assume data is stored in naming columns too or just IDs.
+            // The transfers table has origin_project_name but storing warehouse names directly isn't always standard.
+            // Let's fetch warehouses just in case we need to map IDs.
+            const { data: wh } = await supabase.from('warehouses').select('id, name');
+            setWarehouses(wh || []);
 
-        const { data: wh } = await supabase.from('warehouses').select('*').eq('is_active', true);
-        setWarehouses(wh || []);
-
-        const { data: prod } = await supabase.from('products').select('*');
-        setProducts(prod || []);
-
-        // Cargar proyectos con formato Proyecto (Cliente)
-        const { data: proj, error } = await supabaseProcurement
-            .from('proyectos')
-            .select('id, proyecto, cliente, activo')
-            .eq('activo', true)
-            .order('proyecto', { ascending: true });
-
-        if (error) throw error;
-
-        const mappedProjects = proj?.map(p => ({
-            id: p.id,
-            name: `${p.proyecto} (${p.cliente})`, 
-            proyecto_solo: p.proyecto,
-            cliente_solo: p.cliente
-        })) || [];
-        
-        setProjects(mappedProjects);
-      } catch (error) {
-        console.error("Error cargando datos maestros:", error);
-      }
+        } catch (error) {
+            console.error("Error loading transfers:", error);
+        } finally {
+            setLoading(false);
+        }
     };
-    loadData();
-  }, []);
 
-  // Lógica de filtrado de bodegas
-  const availableOrigins = useMemo(() => {
-    return warehouses.filter(w => w.id !== formData.destinationWarehouse);
-  }, [warehouses, formData.destinationWarehouse]);
+    useEffect(() => {
+        fetchTransfers();
+    }, []);
 
-  const availableDestinations = useMemo(() => {
-    return warehouses.filter(w => w.id !== formData.originWarehouse);
-  }, [warehouses, formData.originWarehouse]);
-
-  const handleOpenModal = async (product) => {
-    if (!formData.originWarehouse) return alert("Selecciona primero la bodega de origen.");
-    const { data: locs } = await supabase
-      .from('product_locations')
-      .select('*, locations(full_code, zone, row, shelf)')
-      .eq('warehouse_id', formData.originWarehouse)
-      .eq('product_id', product.id)
-      .gt('quantity', 0);
-
-    if (!locs || locs.length === 0) {
-      alert("Este producto no tiene ubicación física asignada en esta bodega.");
-      return;
-    }
-    setLocationsForProduct(locs);
-    setSelectedProductForModal(product);
-    setIsModalOpen(true);
-  };
-
-  const handleConfirmFromModal = (distribution) => {
-    const totalQty = distribution.reduce((sum, item) => sum + Number(item.quantityToTake), 0);
-    if (totalQty <= 0) return alert("Cantidad inválida.");
-    setCart([...cart, { ...selectedProductForModal, transferQty: totalQty, distribution }]);
-    setIsModalOpen(false);
-    setSelectedProductForModal(null);
-    setSearchTerm('');
-  };
-
-  const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
-
-  const handleSaveTransfer = async () => {
-    if (!formData.originWarehouse || !formData.destinationWarehouse) return alert("Faltan bodegas.");
-    if (!formData.authorizedBy) return alert("Falta autorización.");
-    if (cart.length === 0) return alert("Carrito vacío.");
-
-    const confirm = window.confirm(`¿Confirmar Traspaso ${nextTransferId}?`);
-    if (!confirm) return;
-
-    setLoading(true);
-    try {
-        const transferId = nextTransferId;
-        const originWhName = warehouses.find(w => w.id === formData.originWarehouse)?.name;
-        const destWhName = warehouses.find(w => w.id === formData.destinationWarehouse)?.name;
-        const originProjName = projects.find(p => p.id == formData.originProjectId)?.name || 'Sin Asignar';
-        const destProjName = projects.find(p => p.id == formData.destinationProjectId)?.name || 'Sin Asignar';
-
-        // Registro en tabla maestra transfers
-        const { error: masterError } = await supabase.from('transfers').insert({
-            transfer_number: transferId,
-            origin_warehouse_id: formData.originWarehouse,
-            destination_warehouse_id: formData.destinationWarehouse,
-            origin_project_name: originProjName,
-            destination_project_name: destProjName,
-            authorized_by: formData.authorizedBy,
-            user_email: user?.email
-        });
-
-        if (masterError) throw masterError;
-
-        // Procesar movimientos (Stock)
-        for (const item of cart) {
-            for (const dist of item.distribution) {
-                if (dist.quantityToTake > 0) {
-                    const { data: cur } = await supabase.from('product_locations').select('quantity').eq('id', dist.tableId).single();
-                    const newQty = (cur?.quantity || 0) - Number(dist.quantityToTake);
-                    if (newQty <= 0) await supabase.from('product_locations').delete().eq('id', dist.tableId);
-                    else await supabase.from('product_locations').update({ quantity: newQty }).eq('id', dist.tableId);
-
-                    await supabase.from('movements').insert({
-                        type: 'TRANSFER_OUT',
-                        warehouse_id: formData.originWarehouse,
-                        product_id: item.id,
-                        quantity: dist.quantityToTake,
-                        transfer_number: transferId,
-                        authorized_by: formData.authorizedBy,
-                        project_origin: originProjName,
-                        project_destination: destProjName,
-                        other_data: `Rack: ${dist.locationCode}`,
-                        user_email: user?.email
-                    });
-                }
-            }
-            await supabase.from('movements').insert({
-                type: 'TRANSFER_IN',
-                warehouse_id: formData.destinationWarehouse,
-                product_id: item.id,
-                quantity: item.transferQty,
-                transfer_number: transferId,
-                authorized_by: formData.authorizedBy,
-                project_origin: originProjName,
-                project_destination: destProjName,
-                other_data: `Pendiente Recepción`,
-                user_email: user?.email
-            });
+    // Fetch Details when Transfer Selected
+    useEffect(() => {
+        if (!selectedTransfer) {
+            setTransferDetails([]);
+            return;
         }
 
-        setLastTransferData({
-            transfer_number: transferId,
-            origin_wh_name: originWhName,
-            dest_wh_name: destWhName,
-            origin_project: originProjName,
-            dest_project: destProjName,
-            authorized_by: formData.authorizedBy,
-            items: cart
-        });
+        const fetchDetails = async () => {
+            setLoadingDetails(true);
+            try {
+                // We fetch movements associated with this transfer number
+                const { data, error } = await supabase
+                    .from('movements')
+                    .select('*, products(name, code)')
+                    .eq('transfer_number', selectedTransfer.transfer_number)
+                    .eq('type', 'TRANSFER_OUT'); // We only need the items list, one side is enough to show what was moved
 
-        setCart([]);
-        alert(`✅ Traspaso ${transferId} completado.`);
-        await fetchNextFolio(); // Actualizar folio para el próximo
+                if (error) throw error;
+                setTransferDetails(data || []);
+            } catch (error) {
+                console.error("Error loading details:", error);
+            } finally {
+                setLoadingDetails(false);
+            }
+        };
 
-    } catch (error) {
-        alert("Error: " + error.message);
-    } finally {
-        setLoading(false);
-    }
-  };
+        fetchDetails();
+    }, [selectedTransfer]);
 
-  const filteredProducts = useMemo(() => {
-    if (!searchTerm) return [];
-    return products.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.code.toLowerCase().includes(searchTerm.toLowerCase())).slice(0, 10);
-  }, [searchTerm, products]);
 
-  return (
-    <div className="pb-20 bg-slate-50 min-h-screen font-sans text-slate-800">
-      
-      <div className="bg-white border-b sticky top-0 z-10 shadow-sm px-6 py-4 flex justify-between items-center">
-          <div>
-            <h1 className="text-xl font-bold flex items-center gap-2 text-indigo-700">
-                <ArrowRightLeft/> Traspaso de Materiales
-            </h1>
-            <p className="text-xs text-slate-500">Gestión correlativa de movimientos</p>
-          </div>
-          <button onClick={() => navigate('/gestion')} className="text-sm font-bold text-slate-500 hover:text-slate-800">Volver</button>
-      </div>
+    const getWarehouseName = (id) => {
+        const wh = warehouses.find(w => w.id === id);
+        return wh ? wh.name : 'Desconocida';
+    };
 
-      <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* CONFIGURACIÓN */}
-        <div className="lg:col-span-1 space-y-6">
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-indigo-100">
-                <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Building2 size={18}/> Ruta</h3>
-                <div className="space-y-4">
-                    <Combobox options={availableOrigins} value={formData.originWarehouse} onChange={(val) => {setFormData({...formData, originWarehouse: val}); setCart([]);}} label="Origen" />
-                    <div className="flex justify-center -my-2"><ArrowRightLeft size={16} className="rotate-90 text-slate-400"/></div>
-                    <Combobox options={availableDestinations} value={formData.destinationWarehouse} onChange={(val) => setFormData({...formData, destinationWarehouse: val})} label="Destino" />
+    const filteredTransfers = useMemo(() => {
+        if (!searchTerm) return transfers;
+        const lower = searchTerm.toLowerCase();
+        return transfers.filter(t =>
+            t.transfer_number.toLowerCase().includes(lower) ||
+            t.origin_project_name?.toLowerCase().includes(lower) ||
+            t.destination_project_name?.toLowerCase().includes(lower) ||
+            t.authorized_by?.toLowerCase().includes(lower)
+        );
+    }, [transfers, searchTerm]);
+
+    // Helper to format data for PDF
+    const preparePdfData = (transfer, details) => {
+        if (!transfer || !details) return null;
+        return {
+            transfer_number: transfer.transfer_number,
+            origin_wh_name: getWarehouseName(transfer.origin_warehouse_id),
+            dest_wh_name: getWarehouseName(transfer.destination_warehouse_id),
+            origin_project: transfer.origin_project_name,
+            dest_project: transfer.destination_project_name,
+            authorized_by: transfer.authorized_by,
+            items: details.map(d => ({
+                name: d.products?.name,
+                code: d.products?.code,
+                transferQty: d.quantity
+            })),
+            date: new Date(transfer.created_at).toLocaleDateString()
+        };
+    };
+
+    return (
+        <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
+
+            {/* Header Compacto */}
+            <div className="bg-white border-b px-6 py-4 flex justify-between items-center shadow-sm z-10 sticky top-0">
+                <div>
+                    <h1 className="text-xl font-bold flex items-center gap-2 text-slate-800">
+                        <ArrowRightLeft className="text-indigo-600" size={20} /> Historial de Traspasos
+                    </h1>
                 </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-                <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><UserCheck size={18}/> Proyectos</h3>
-                <div className="space-y-3">
-                    <input type="text" className="w-full border p-2 rounded-lg outline-none" placeholder="Autorizado Por" value={formData.authorizedBy} onChange={e => setFormData({...formData, authorizedBy: e.target.value})} />
-                    <Combobox options={[{ id: '', name: '-- Sin Proyecto --' }, ...projects]} value={formData.originProjectId} onChange={(val) => setFormData({...formData, originProjectId: val})} label="Proyecto Origen" />
-                    <Combobox options={[{ id: '', name: '-- Sin Proyecto --' }, ...projects]} value={formData.destinationProjectId} onChange={(val) => setFormData({...formData, destinationProjectId: val})} label="Proyecto Destino" />
-                </div>
-            </div>
-        </div>
-
-        {/* CARRITO Y ACCIONES */}
-        <div className="lg:col-span-2 space-y-6">
-            <div className={`bg-white p-5 rounded-xl shadow-sm border ${!formData.originWarehouse ? 'opacity-50 pointer-events-none' : ''}`}>
-                <div className="flex items-center gap-3 border bg-slate-50 p-3 rounded-xl">
-                    <Search className="text-slate-400"/><input type="text" placeholder="Buscar producto..." className="bg-transparent w-full outline-none" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-                </div>
-                {searchTerm && (
-                    <div className="max-h-40 overflow-y-auto border rounded-lg bg-white absolute shadow-xl w-full max-w-lg z-20">
-                        {filteredProducts.map(prod => (
-                            <div key={prod.id} className="p-3 hover:bg-indigo-50 cursor-pointer" onClick={() => handleOpenModal(prod)}>
-                                <p className="font-bold text-sm">{prod.name}</p><p className="text-xs text-slate-400">{prod.code}</p>
-                            </div>
-                        ))}
+                <div className="flex gap-3">
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                            type="text"
+                            placeholder="Buscar traspaso..."
+                            className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-indigo-400 text-sm w-64 transition-all focus:w-80"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
                     </div>
-                )}
-            </div>
-
-            <div className="bg-white rounded-xl shadow-sm border overflow-hidden flex flex-col">
-                <div className="bg-indigo-50 px-6 py-4 border-b border-indigo-100 flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                        <div className="bg-indigo-600 text-white p-1.5 rounded-lg shadow-sm"><FileText size={20}/></div>
-                        <div>
-                            <h3 className="font-bold text-indigo-900">Documento de Traspaso</h3>
-                            <span className="text-[10px] font-mono text-indigo-500 uppercase font-bold tracking-wider">Folio actual: {nextTransferId}</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex-1 min-h-[300px] p-4 space-y-2">
-                    {cart.map(item => (
-                        <div key={item.id} className="bg-white border p-3 rounded-lg shadow-sm">
-                            <div className="flex justify-between font-bold text-sm"><span>{item.name}</span><button onClick={() => removeFromCart(item.id)} className="text-red-400"><Trash2 size={16}/></button></div>
-                            <div className="text-xs text-slate-500 mt-1">Cantidad: <span className="text-indigo-600 font-bold">{item.transferQty} UN</span></div>
-                        </div>
-                    ))}
-                    {cart.length === 0 && <div className="text-center text-slate-400 mt-10">Agregue materiales para iniciar</div>}
-                </div>
-
-                <div className="p-4 bg-slate-50 border-t flex flex-col gap-3">
-                    <div className="flex gap-2">
-                        <button onClick={async () => {
-                            if (cart.length === 0) return alert('Carrito vacío.');
-                            if (!formData.originWarehouse || !formData.destinationWarehouse) return alert('Selecciona origen y destino para la vista previa.');
-                            // Construir payload similar al que se guarda
-                            const originWhName = warehouses.find(w => w.id === formData.originWarehouse)?.name;
-                            const destWhName = warehouses.find(w => w.id === formData.destinationWarehouse)?.name;
-                            const originProjName = projects.find(p => p.id == formData.originProjectId)?.name || 'Sin Asignar';
-                            const destProjName = projects.find(p => p.id == formData.destinationProjectId)?.name || 'Sin Asignar';
-                            const previewData = {
-                                transfer_number: nextTransferId || 'BORRADOR',
-                                origin_wh_name: originWhName,
-                                dest_wh_name: destWhName,
-                                origin_project: originProjName,
-                                dest_project: destProjName,
-                                authorized_by: formData.authorizedBy,
-                                items: cart,
-                                currency: 'CLP'
-                            };
-                            try {
-                                const blob = await pdf(<TransferPDF data={previewData} />).toBlob();
-                                const url = URL.createObjectURL(blob);
-                                window.open(url, '_blank');
-                            } catch (err) {
-                                console.error('Error generando PDF preview', err);
-                                alert('Error generando vista previa del PDF');
-                            }
-                        }} className="w-full bg-amber-500 text-white py-3 rounded-xl font-bold hover:bg-amber-600 flex justify-center items-center gap-2">
-                            <FileText size={18}/> Vista Previa PDF
-                        </button>
-                    </div>
-                    {lastTransferData && (
-                        <PDFDownloadLink document={<TransferPDF data={lastTransferData}/>} fileName={`${lastTransferData.transfer_number}.pdf`}>
-                            <button className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 flex justify-center items-center gap-2"><FileText size={18}/> Descargar Comprobante {lastTransferData.transfer_number}</button>
-                        </PDFDownloadLink>
-                    )}
-                    <button onClick={handleSaveTransfer} disabled={loading || cart.length === 0} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold hover:bg-indigo-700 shadow-lg disabled:opacity-50 flex justify-center items-center gap-2">
-                        {loading ? <Loader className="animate-spin"/> : <><Save size={20}/> Confirmar {nextTransferId}</>}
+                    <button
+                        onClick={() => setIsCreateModalOpen(true)}
+                        className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-indigo-700 shadow-sm flex items-center gap-2 text-sm transition-all"
+                    >
+                        <Plus size={16} /> Nuevo Traspaso
                     </button>
                 </div>
             </div>
-        </div>
-      </div>
 
-      {isModalOpen && selectedProductForModal && (
-        <DistributionModal product={selectedProductForModal} locations={locationsForProduct} onConfirm={handleConfirmFromModal} onClose={() => setIsModalOpen(false)} />
-      )}
-    </div>
-  );
-}
+            {/* Main Content */}
+            <div className="flex-1 overflow-hidden relative bg-slate-50/50 p-6">
 
-// COMPONENTE MODAL (Mantenido según requerimiento original)
-function DistributionModal({ product, locations, onConfirm, onClose }) {
-    const [inputs, setInputs] = useState({}); 
-    const handleInputChange = (id, max, val) => setInputs(prev => ({ ...prev, [id]: Math.min(Math.max(Number(val), 0), max) }));
-    const handleSave = () => {
-        const dist = locations.map(l => ({ tableId: l.id, locationId: l.location_id, locationCode: l.locations?.full_code || '?', quantityToTake: inputs[l.id] || 0 })).filter(d => d.quantityToTake > 0);
-        onConfirm(dist);
-    };
-    const total = Object.values(inputs).reduce((a, b) => a + b, 0);
+                <div className="max-w-7xl mx-auto h-full flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
 
-    return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
-                <div className="p-5 border-b flex justify-between items-center bg-slate-50">
-                    <div><h3 className="font-bold text-lg">{product.name}</h3><p className="text-xs text-slate-500">Distribución de Rack</p></div>
-                    <button onClick={onClose}><X size={20}/></button>
+                    <div className="overflow-auto flex-1">
+                        <table className="w-full text-left border-collapse">
+                            <thead className="bg-slate-50 sticky top-0 z-10 border-b border-slate-200 shadow-sm">
+                                <tr>
+                                    <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-24">Folio</th>
+                                    <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">Fecha</th>
+                                    <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Origen</th>
+                                    <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Destino</th>
+                                    <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider">Autorizado Por</th>
+                                    <th className="px-4 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider text-right w-16"></th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                                {loading ? (
+                                    <tr><td colSpan="6" className="p-10 text-center text-slate-400"><Loader className="animate-spin mx-auto mb-2" />Cargando...</td></tr>
+                                ) : filteredTransfers.length === 0 ? (
+                                    <tr><td colSpan="6" className="p-10 text-center text-slate-400 italic">No se encontraron traspasos</td></tr>
+                                ) : (
+                                    filteredTransfers.map(t => (
+                                        <tr
+                                            key={t.id}
+                                            onClick={() => setSelectedTransfer(t)}
+                                            className={`cursor-pointer transition-colors group ${selectedTransfer?.id === t.id ? 'bg-indigo-50 border-l-4 border-l-indigo-500' : 'hover:bg-slate-50 border-l-4 border-l-transparent'}`}
+                                        >
+                                            <td className="px-4 py-2.5">
+                                                <span className="font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded text-[11px] border border-indigo-100">{t.transfer_number}</span>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-xs text-slate-500">
+                                                {new Date(t.created_at).toLocaleDateString()}
+                                            </td>
+                                            <td className="px-4 py-2.5">
+                                                <div className="flex flex-col">
+                                                    <span className="text-xs font-bold text-slate-700">{getWarehouseName(t.origin_warehouse_id)}</span>
+                                                    <span className="text-[10px] text-slate-400 truncate max-w-[180px]" title={t.origin_project_name}>{t.origin_project_name}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-2.5">
+                                                <div className="flex flex-col">
+                                                    <span className="text-xs font-bold text-slate-700">{getWarehouseName(t.destination_warehouse_id)}</span>
+                                                    <span className="text-[10px] text-slate-400 truncate max-w-[180px]" title={t.destination_project_name}>{t.destination_project_name}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-xs text-slate-600">
+                                                <div className="flex items-center gap-1.5">
+                                                    <div className="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center text-[9px] font-bold text-slate-500">
+                                                        {t.authorized_by?.charAt(0)}
+                                                    </div>
+                                                    {t.authorized_by}
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-right">
+                                                <ChevronRight className="ml-auto text-slate-300 group-hover:text-indigo-400 transition-colors" size={16} />
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="bg-slate-50 border-t px-4 py-2 text-[10px] text-slate-400 flex justify-between">
+                        <span>Mostrando {filteredTransfers.length} registros</span>
+                        <span>Ordenado por fecha (Recientes primero)</span>
+                    </div>
+
                 </div>
-                <div className="p-5 overflow-y-auto flex-1 space-y-4">
-                    {locations.map(loc => (
-                        <div key={loc.id} className="flex items-center justify-between p-3 border rounded-xl">
-                            <div><p className="font-black text-slate-700">{loc.locations?.full_code}</p><p className="text-xs text-slate-400">Stock: {loc.quantity}</p></div>
-                            <input type="number" className="w-20 p-2 text-center border-2 rounded-lg font-bold text-indigo-600" value={inputs[loc.id] || ''} placeholder="0" onChange={(e) => handleInputChange(loc.id, loc.quantity, e.target.value)} />
-                        </div>
-                    ))}
+
+                {/* Side Drawer */}
+                <div className={`absolute top-0 right-0 h-full w-[500px] bg-white shadow-2xl transform transition-transform duration-300 ease-in-out border-l z-20 flex flex-col ${selectedTransfer ? 'translate-x-0' : 'translate-x-full'}`}>
+
+                    {/* Drawer Header */}
+                    {selectedTransfer && (
+                        <>
+                            <div className="px-6 py-5 border-b bg-slate-50 flex justify-between items-start">
+                                <div>
+                                    <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                        <FileText className="text-indigo-600" /> Detalle de Traspaso
+                                    </h2>
+                                    <p className="text-sm text-slate-500 mt-1">Folio: <strong>{selectedTransfer.transfer_number}</strong></p>
+                                </div>
+                                <button onClick={() => setSelectedTransfer(null)} className="text-slate-400 hover:text-slate-600 p-1 hover:bg-slate-200 rounded-full transition-colors">
+                                    <X size={24} />
+                                </button>
+                            </div>
+
+                            {/* Drawer Content */}
+                            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+                                {/* Info Cards */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+                                        <p className="text-xs font-bold text-slate-400 uppercase mb-1">Origen</p>
+                                        <p className="font-bold text-slate-700 text-sm">{getWarehouseName(selectedTransfer.origin_warehouse_id)}</p>
+                                        <p className="text-xs text-slate-500 mt-0.5">{selectedTransfer.origin_project_name}</p>
+                                    </div>
+                                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+                                        <p className="text-xs font-bold text-slate-400 uppercase mb-1">Destino</p>
+                                        <p className="font-bold text-slate-700 text-sm">{getWarehouseName(selectedTransfer.destination_warehouse_id)}</p>
+                                        <p className="text-xs text-slate-500 mt-0.5">{selectedTransfer.destination_project_name}</p>
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center gap-3 p-3 border rounded-lg">
+                                    <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold">
+                                        {selectedTransfer.authorized_by?.charAt(0)}
+                                    </div>
+                                    <div>
+                                        <p className="text-xs text-slate-400 uppercase font-bold">Autorizado Por</p>
+                                        <p className="text-sm font-bold text-slate-700">{selectedTransfer.authorized_by}</p>
+                                        <p className="text-xs text-slate-400">{selectedTransfer.user_email}</p>
+                                    </div>
+                                </div>
+
+                                {/* Items List */}
+                                <div>
+                                    <h3 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm uppercase tracking-wide">
+                                        <MapPin size={16} /> Materiales
+                                    </h3>
+                                    <div className="space-y-2">
+                                        {loadingDetails ? (
+                                            <div className="py-10 text-center"><Loader className="animate-spin mx-auto text-indigo-500" /></div>
+                                        ) : transferDetails.length > 0 ? (
+                                            transferDetails.map((item, idx) => (
+                                                <div key={idx} className="flex justify-between items-center p-3 border border-slate-100 rounded-lg hover:bg-slate-50">
+                                                    <div>
+                                                        <p className="text-sm font-bold text-slate-700">{item.products?.name}</p>
+                                                        <p className="text-xs text-slate-400 font-mono">{item.products?.code}</p>
+                                                        {item.other_data && <p className="text-[10px] text-indigo-400 mt-1">{item.other_data}</p>}
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <span className="font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded text-xs">{item.quantity} UN</span>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <p className="text-sm text-slate-400 italic">No se encontraron detalles.</p>
+                                        )}
+                                    </div>
+                                </div>
+
+                            </div>
+
+                            {/* Drawer Footer */}
+                            <div className="p-4 border-t bg-slate-50">
+                                {!loadingDetails && transferDetails.length > 0 && (
+                                    <PDFDownloadLink
+                                        document={<TransferPDF data={preparePdfData(selectedTransfer, transferDetails)} />}
+                                        fileName={`Traspaso_${selectedTransfer.transfer_number}.pdf`}
+                                        className="w-full"
+                                    >
+                                        {({ loading: pdfLoading }) => (
+                                            <button
+                                                disabled={pdfLoading}
+                                                className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 flex justify-center items-center gap-2 shadow-sm transition-all"
+                                            >
+                                                {pdfLoading ? <Loader size={18} className="animate-spin" /> : <FileText size={18} />}
+                                                Descargar Comprobante PDF
+                                            </button>
+                                        )}
+                                    </PDFDownloadLink>
+                                )}
+                            </div>
+                        </>
+                    )}
                 </div>
-                <div className="p-5 border-t bg-slate-50 flex justify-between items-center">
-                    <span className="font-black text-2xl text-indigo-700">{total} UN</span>
-                    <button onClick={handleSave} disabled={total === 0} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold">Confirmar</button>
-                </div>
+
             </div>
+
+            {/* Create Modal */}
+            {isCreateModalOpen && (
+                <CreateTransferModal
+                    onClose={() => setIsCreateModalOpen(false)}
+                    onSuccess={() => {
+                        fetchTransfers();
+                        setIsCreateModalOpen(false);
+                    }}
+                />
+            )}
+
         </div>
     );
 }

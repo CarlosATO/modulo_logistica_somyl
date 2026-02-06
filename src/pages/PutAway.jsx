@@ -38,24 +38,13 @@ const PutAway = () => {
             setWarehouses(whs || []);
 
             // Cargar conteo de pendientes por bodega
-            const { data: pending } = await supabase
-                .from('view_pending_putaway')
-                .select('warehouse_id, pending_stock')
-                .gt('pending_stock', 0);
-
-            // Agrupar por warehouse_id
-            const counts = {};
-            (pending || []).forEach(item => {
-                counts[item.warehouse_id] = (counts[item.warehouse_id] || 0) + 1;
-            });
-            setWarehouseCounts(counts);
+            // OMITIR CÁLCULO GLOBAL DE MAPA DE CALOR POR RENDIMIENTO (Requiere Backend View)
+            setWarehouseCounts({});
             setLoadingCounts(false);
 
             // Auto-seleccionar bodega con pendientes, o la primera
-            const warehouseWithPending = whs?.find(w => counts[w.id] > 0);
-            if (warehouseWithPending) {
-                setSelectedWarehouse(warehouseWithPending.id);
-            } else if (whs?.length > 0) {
+            // Auto-seleccionar la primera bodega por defecto
+            if (whs?.length > 0) {
                 setSelectedWarehouse(whs[0].id);
             }
         };
@@ -74,27 +63,98 @@ const PutAway = () => {
 
         try {
             // OPTIMIZACIÓN: Consultas en paralelo con Promise.all
-            const [locsResponse, pendingResponse] = await Promise.all([
-                // A. Cargar solo campos necesarios de ubicaciones
-                supabase
-                    .from('locations')
-                    .select('id, full_code, zone')
-                    .eq('warehouse_id', selectedWarehouse)
-                    .order('full_code'),
-
-                // B. Cargar solo campos necesarios de vista
-                supabase
-                    .from('view_pending_putaway')
-                    .select('id, code, name, pending_stock')
-                    .eq('warehouse_id', selectedWarehouse)
-                    .gt('pending_stock', 0) // Solo items con stock pendiente > 0
+            // Calcular Pendientes manualmente (Client Side) para garantizar consistencia con InventoryViewer
+            // AUMENTAMOS LIMITE A 10,000 REGISTROS PARA EVITAR CORTE
+            const [locsResponse, movesResponse, racksResponse, prodsResponse] = await Promise.all([
+                supabase.from('locations').select('id, full_code, zone').eq('warehouse_id', selectedWarehouse).order('full_code').range(0, 9999),
+                supabase.from('movements').select('product_id, type, quantity').eq('warehouse_id', selectedWarehouse).range(0, 9999),
+                supabase.from('product_locations').select('product_id, quantity').eq('warehouse_id', selectedWarehouse).range(0, 9999),
+                supabase.from('products').select('id, code, name').range(0, 9999)
             ]);
 
+            const pendingList = [];
+            const stockMap = {}; // Moved outside for debug access
+
+            if (movesResponse.data && prodsResponse.data) {
+                // 1. Calcular Stock Contable por Producto
+                movesResponse.data.forEach(m => {
+                    const qty = Number(m.quantity);
+                    if (!stockMap[m.product_id]) stockMap[m.product_id] = 0;
+
+                    if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') stockMap[m.product_id] += qty;
+                    else if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') stockMap[m.product_id] -= qty;
+                });
+
+                // 2. Restar lo ya ubicado en racks
+                (racksResponse.data || []).forEach(r => {
+                    if (stockMap[r.product_id]) stockMap[r.product_id] -= Number(r.quantity);
+                });
+
+                // 3. Generar lista final
+                Object.keys(stockMap).forEach(pid => {
+                    if (stockMap[pid] > 0) {
+                        // FIX: Use direct comparison, not Number() - IDs are UUIDs (strings)
+                        const prod = prodsResponse.data.find(p => p.id === pid);
+                        if (prod) {
+                            pendingList.push({
+                                id: prod.id,
+                                code: prod.code,
+                                name: prod.name,
+                                pending_stock: stockMap[pid]
+                            });
+                        }
+                    }
+                });
+            }
+
             if (locsResponse.error) throw locsResponse.error;
-            if (pendingResponse.error) throw pendingResponse.error;
+            if (movesResponse.error) throw movesResponse.error;
 
             setLocations(locsResponse.data || []);
-            setStagingItems(pendingResponse.data || []);
+
+            // Attach debug info to array for UI display
+            const finalArray = pendingList.sort((a, b) => b.pending_stock - a.pending_stock);
+            finalArray._debug_moves_count = movesResponse.data ? movesResponse.data.length : 0;
+            finalArray._debug_prods_count = prodsResponse.data ? prodsResponse.data.length : 0;
+            finalArray._debug_racks_count = racksResponse.data ? racksResponse.data.length : 0;
+
+            // DETAILED DEBUG: Movement type breakdown
+            const typeBreakdown = {};
+            let totalIn = 0, totalOut = 0;
+            (movesResponse.data || []).forEach(m => {
+                typeBreakdown[m.type] = (typeBreakdown[m.type] || 0) + 1;
+                const qty = Number(m.quantity);
+                if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') totalIn += qty;
+                else if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') totalOut += qty;
+            });
+            finalArray._debug_types = JSON.stringify(typeBreakdown);
+            finalArray._debug_totalIn = totalIn;
+            finalArray._debug_totalOut = totalOut;
+
+            // Sample: Find Cable ADSS product  
+            const cableProduct = prodsResponse.data?.find(p => p.name?.includes('CABLE ADSS'));
+            if (cableProduct) {
+                const cableStock = stockMap[cableProduct.id] || 0;
+                const cableRacked = (racksResponse.data || []).filter(r => r.product_id === cableProduct.id).reduce((s, r) => s + Number(r.quantity), 0);
+
+                // Detailed movement analysis for Cable ADSS
+                let cableIn = 0, cableOut = 0, cableMoveCount = 0;
+                (movesResponse.data || []).filter(m => m.product_id === cableProduct.id).forEach(m => {
+                    cableMoveCount++;
+                    const qty = Number(m.quantity);
+                    if (m.type === 'INBOUND' || m.type === 'TRANSFER_IN') cableIn += qty;
+                    else if (m.type === 'OUTBOUND' || m.type === 'TRANSFER_OUT') cableOut += qty;
+                });
+
+                finalArray._debug_cable_id = cableProduct.id;
+                finalArray._debug_cable_stock = cableStock;
+                finalArray._debug_cable_racked = cableRacked;
+                finalArray._debug_cable_moves = cableMoveCount;
+                finalArray._debug_cable_in = cableIn;
+                finalArray._debug_cable_out = cableOut;
+            }
+
+            setStagingItems(finalArray);
 
         } catch (error) {
             console.error("Error cargando datos:", error);
@@ -206,10 +266,10 @@ const PutAway = () => {
                                 key={wh.id}
                                 onClick={() => setSelectedWarehouse(wh.id)}
                                 className={`p-4 rounded-xl border-2 text-left transition-all relative ${isSelected
-                                        ? 'border-blue-500 bg-blue-50'
-                                        : count > 0
-                                            ? 'border-orange-300 bg-orange-50 hover:border-orange-400'
-                                            : 'border-slate-200 hover:border-slate-300'
+                                    ? 'border-blue-500 bg-blue-50'
+                                    : count > 0
+                                        ? 'border-orange-300 bg-orange-50 hover:border-orange-400'
+                                        : 'border-slate-200 hover:border-slate-300'
                                     }`}
                             >
                                 <Warehouse size={20} className={isSelected ? 'text-blue-600' : count > 0 ? 'text-orange-500' : 'text-slate-400'} />
@@ -226,6 +286,21 @@ const PutAway = () => {
                             </button>
                         );
                     })}
+                </div>
+            </div>
+
+            {/* ℹ️ INFO BANNER: Global Stock Explanation */}
+            <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-r-xl flex items-start gap-3">
+                <div className="text-blue-500 flex-shrink-0 mt-0.5">ℹ️</div>
+                <div>
+                    <p className="font-bold text-blue-800 text-sm">
+                        Stock Pendiente Global
+                    </p>
+                    <p className="text-blue-700 text-xs mt-1">
+                        Esta pantalla muestra el stock <strong>GLOBAL</strong> pendiente de ubicar en la bodega,
+                        calculado como: (Entradas Totales - Salidas Totales) - Stock en Racks.
+                        <strong> No está filtrado por proyecto.</strong>
+                    </p>
                 </div>
             </div>
 
