@@ -1,837 +1,217 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import {
-    Search, Truck, UploadCloud, Plus, Trash2, CheckCircle,
-    Loader, Building, Calendar, Paperclip, FileText, Package, AlertCircle, Hash, Save, ShoppingCart, AlertTriangle
-} from 'lucide-react';
-import GoogleSearchBar from '../components/GoogleSearchBar'; // <--- Nuevo import
-import Combobox from '../components/Combobox';
-import { toast } from 'sonner'; // <--- NUEVO IMPORT
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
-import { supabaseProcurement } from '../services/procurementClient';
-import { useAuth } from '../context/AuthContext';
+import {
+    Search, FileText, Loader, CheckCircle2, Clock, Trash2, Edit3, ExternalLink, Plus, ArrowDownCircle
+} from 'lucide-react';
+import { toast } from 'sonner';
+import DirectInboundDetailModal from './DirectInboundDetailModal';
+import InboundReceptionForm from './InboundReceptionForm';
 
 export default function InboundReception() {
-    const { user } = useAuth();
+    const [receptions, setReceptions] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [selectedReception, setSelectedReception] = useState(null);
+    const [isFormOpen, setIsFormOpen] = useState(false);
 
-    // --- ESTADOS GLOBALES ---
-    const [warehouses, setWarehouses] = useState([]);
-    const [selectedWarehouse, setSelectedWarehouse] = useState(''); // Sin valor predeterminado
-    const [activeTab, setActiveTab] = useState('OC');
-    const [loading, setLoading] = useState(false);
-    const [processing, setProcessing] = useState(false);
-
-    // --- DATOS MAESTROS ---
-    const [projectsDB, setProjectsDB] = useState([]);
-    const [suppliersDB, setSuppliersDB] = useState([]);
-    const [clientsList, setClientsList] = useState([]);
-    const [clientCatalog, setClientCatalog] = useState([]);
-
-    // --- ESTADOS OC ---
-    const [ocNumber, setOcNumber] = useState('');
-    const [ocData, setOcData] = useState(null);
-    const [ocHeader, setOcHeader] = useState(null);
-    const [ocHistory, setOcHistory] = useState({});
-    const [ocInputs, setOcInputs] = useState({});
-    // Proyecto asociado a la OC (se utiliza en la pestaña OC)
-    const [ocProject, setOcProject] = useState('');
-
-    // --- ESTADOS ASIGNADOS (MANUAL) ---
-    const [assignedForm, setAssignedForm] = useState({
-        client_name: '',
-        project_name: '',
-        document_number: '',
-        supplier_name: ''
-    });
-    const [manualCart, setManualCart] = useState([]);
-    const [selectedMaterialId, setSelectedMaterialId] = useState('');
-    const [newItem, setNewItem] = useState({
-        code: '', name: '', quantity: '', unit: 'UN', price: '0'
-    });
-    const [receiptFile, setReceiptFile] = useState(null);
-    const materialComboboxRef = useRef(null);
-    const quantityInputRef = useRef(null);
-
-    // --- ESTADOS INGRESO DIRECTO ---
-    const [products, setProducts] = useState([]);
-    const [selectedProject, setSelectedProject] = useState('');
-    const [directReceiptCart, setDirectReceiptCart] = useState([]);
-    const [directInputs, setDirectInputs] = useState({ documentNumber: '', comments: '' });
-    const [selectedProductForDirect, setSelectedProductForDirect] = useState('');
-    const [directLineQuantity, setDirectLineQuantity] = useState('');
-
-    // ==========================================
-    // 1. CARGA INICIAL DE MAESTROS
-    // ==========================================
-    useEffect(() => {
-        const fetchMasters = async () => {
-            try {
-                const { data: wh } = await supabase.from('warehouses').select('*').eq('is_active', true);
-                setWarehouses(wh || []);
-
-                const { data: proj } = await supabaseProcurement
-                    .from('proyectos')
-                    .select('id, proyecto, cliente, activo')
-                    .eq('activo', true)
-                    .order('proyecto', { ascending: true });
-
-                if (proj) {
-                    setProjectsDB(proj);
-                    const uniqueClients = [...new Set(proj.map(p => p.cliente))].filter(Boolean).sort();
-                    setClientsList(uniqueClients);
-                }
-
-                const { data: supp } = await supabaseProcurement
-                    .from('proveedores')
-                    .select('id, nombre, rut')
-                    .order('nombre', { ascending: true });
-
-                setSuppliersDB(supp || []);
-
-                // Cargar productos para Combobox Directo
-                const { data: prods } = await supabase.from('products').select('*');
-                setProducts(prods || []);
-
-            } catch (error) {
-                console.error("Error cargando maestros:", error);
-            }
-        };
-        fetchMasters();
-    }, []);
-
-    // ==========================================
-    // 2. LÓGICA DE CATÁLOGO (ASIGNADOS)
-    // ==========================================
-    useEffect(() => {
-        const loadCatalog = async () => {
-            if (!assignedForm.client_name) {
-                setClientCatalog([]);
-                return;
-            }
-
-            const { data, error } = await supabase
-                .from('assigned_materials')
-                .select('*')
-                .ilike('client_name', `%${assignedForm.client_name}%`)
-                .order('description', { ascending: true });
-
-            if (!error) setClientCatalog(data || []);
-        };
-        loadCatalog();
-    }, [assignedForm.client_name]);
-
-    const handleMaterialSelect = (matId) => {
-        setSelectedMaterialId(matId);
-
-        const material = clientCatalog.find(m => m.id === matId);
-        if (material) {
-            setNewItem({
-                code: material.code,
-                name: material.description,
-                unit: material.unit || 'UN',
-                quantity: '',
-                price: '0'
-            });
-            // Auto-focus al input de cantidad
-            setTimeout(() => {
-                if (quantityInputRef.current) {
-                    quantityInputRef.current.focus();
-                }
-            }, 100);
-        } else {
-            setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '0' });
-        }
-    };
-
-    const filteredProjects = useMemo(() => {
-        if (!assignedForm.client_name) return [];
-        return projectsDB.filter(p => p.cliente === assignedForm.client_name);
-    }, [projectsDB, assignedForm.client_name]);
-
-
-    // ==========================================
-    // 3. LÓGICA OC (CORREGIDA: PRECIO UNITARIO)
-    // ==========================================
-    const handleSearchOC = async (term) => {
-        // Evitamos búsquedas con números muy cortos para no generar falsos positivos
-        if (!term || String(term).trim().length < 3) return;
-
-        setOcNumber(term);
+    const fetchReceptions = async () => {
         setLoading(true);
-        setOcData(null);
-        setOcHeader(null);
-        setReceiptFile(null);
-        setOcInputs({});
-
         try {
-            const { data: ocLines, error } = await supabaseProcurement
-                .from('orden_de_compra')
+            // Obtener recepciones desde la vista actualizada
+            const { data: receptionsData, error: receptionsError } = await supabase
+                .from('v_direct_receptions_summary')
                 .select('*')
-                .eq('orden_compra', parseInt(term));
+                .order('date', { ascending: false });
 
-            if (error || !ocLines?.length) {
-                toast.error("Orden de Compra no encontrada.");
-                return;
-            }
+            if (receptionsError) throw receptionsError;
 
-            const firstLine = ocLines[0];
-            const providerInfo = suppliersDB.find(s => s.id === firstLine.proveedor);
+            // Obtener nombres de bodegas
+            const { data: warehousesData } = await supabase.from('warehouses').select('id, name');
+            const warehousesMap = {};
+            (warehousesData || []).forEach(wh => { warehousesMap[wh.id] = wh.name; });
 
-            setOcHeader({
-                fecha: firstLine.fecha,
-                proveedor: providerInfo ? providerInfo.nombre : 'Proveedor Desconocido',
-                rut: providerInfo ? providerInfo.rut : '-'
-            });
+            // Enriquecer datos
+            const enrichedData = (receptionsData || []).map(item => {
+                let finalProjectName = item.project_name;
 
-            // Historial de recepciones
-            const { data: history } = await supabase
-                .from('movements')
-                .select('oc_line_id, quantity')
-                .eq('oc_number', String(term))
-                .eq('type', 'INBOUND');
+                if (!finalProjectName || finalProjectName === 'null') {
+                    if (item.comments && item.comments.includes('|')) {
+                        finalProjectName = item.comments.split('|')[1]?.trim();
+                    } else {
+                        finalProjectName = 'Sin Proyecto';
+                    }
+                }
 
-            const receivedMap = {};
-            history?.forEach(mov => {
-                receivedMap[mov.oc_line_id] = (receivedMap[mov.oc_line_id] || 0) + Number(mov.quantity);
-            });
-            setOcHistory(receivedMap);
-
-            // CORRECCIÓN PRECIOS: Prioridad al precio de la OC (precio_unitario)
-            const initialInputs = {};
-
-            ocLines.forEach(line => {
-                const officialPrice = line.precio_unitario || line.precio || 0;
-
-                initialInputs[line.art_corr] = {
-                    quantity: '',
-                    price: officialPrice
+                return {
+                    ...item,
+                    warehouse_name: warehousesMap[item.warehouse_id] || 'N/A',
+                    project_name: finalProjectName,
+                    reception_document_url: item.document_url
                 };
             });
 
-            setOcInputs(initialInputs);
-            setOcData(ocLines);
-
-        } catch (err) {
-            console.error(err);
-            toast.error("Error buscando OC.");
+            setReceptions(enrichedData);
+        } catch (error) {
+            console.error(error);
+            toast.error("Error al cargar historial");
         } finally {
             setLoading(false);
         }
     };
 
-    const handleSubmitOC = async () => {
-        if (!selectedWarehouse) {
-            toast.error("⚠️ Debes seleccionar una Bodega de Destino");
-            return;
-        }
-        // VALIDACIÓN: proyecto asignado
-        if (!ocProject) {
-            toast.error("⚠️ Debes asignar un Proyecto a esta recepción");
-            return;
-        }
-        const mainDoc = ocInputs['global_doc'];
-        if (!mainDoc) {
-            toast.error("⚠️ Falta el N° de Guía o Factura");
-            return;
-        }
+    useEffect(() => { fetchReceptions(); }, []);
 
-        // Preparamos los items para el RPC
-        const itemsToProcess = ocData
-            .filter(line => Number(ocInputs[line.art_corr]?.quantity || 0) > 0)
-            .map(line => ({
-                codigo: line.codigo,
-                descripcion: line.descripcion,
-                unidad: line.unidad || 'UN',
-                cantidad: Number(ocInputs[line.art_corr].quantity),
-                precio: Number(ocInputs[line.art_corr].price || 0),
-                art_corr: String(line.art_corr)
-            }));
+    const filteredData = receptions.filter(r =>
+        r.document_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        r.comments?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        r.project_name?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
-        if (itemsToProcess.length === 0) {
-            toast.warning("No hay cantidades ingresadas");
-            return;
-        }
+    const handleDelete = async (docNumber) => {
+        const confirmDelete = window.confirm(`⚠️ ¿Estás seguro de eliminar el ingreso ${docNumber}?`);
+        if (!confirmDelete) return;
 
-        setProcessing(true);
-
-        const promise = new Promise(async (resolve, reject) => {
-            try {
-                let docUrl = null;
-                if (receiptFile) {
-                    const fileName = `OC-${ocNumber}-${Date.now()}.${receiptFile.name.split('.').pop()}`;
-                    const { error: uploadError } = await supabase.storage.from('documents').upload(fileName, receiptFile);
-                    if (uploadError) throw uploadError;
-                    docUrl = fileName;
-                }
-
-                // LLAMADA ATÓMICA AL RPC (incluye project_id)
-                const { error: rpcError } = await supabase.rpc('receive_oc_items', {
-                    p_warehouse_id: selectedWarehouse,
-                    p_oc_number: String(ocNumber),
-                    p_document_number: mainDoc,
-                    p_project_id: ocProject,
-                    p_doc_url: docUrl,
-                    p_global_obs: ocInputs['global_obs'] || null,
-                    p_user_email: user?.email,
-                    p_items: itemsToProcess
-                });
-
-                if (rpcError) throw rpcError;
-
-                // Limpiar todos los campos después de grabar
-                setOcNumber('');
-                setOcData(null);
-                setOcHeader(null);
-                setOcInputs({});
-                setReceiptFile(null);
-                setOcProject('');
-                resolve("Recepción procesada correctamente en servidor");
-
-            } catch (err) {
-                console.error(err);
-                reject("Error: " + (err.message || "Fallo en la transacción"));
-            }
-        });
-
-        toast.promise(promise, {
-            loading: 'Ejecutando transacción segura...',
-            success: (data) => `✅ ${data}`,
-            error: (err) => `❌ ${err}`,
-        }).finally(() => setProcessing(false));
-    };
-
-    // ==========================================
-    // 4. LÓGICA ASIGNADOS
-    // ==========================================
-    const addManualItem = () => {
-        if (!selectedMaterialId || !newItem.quantity) {
-            toast.error('Faltan datos (Selección y Cantidad requeridos).');
-            return;
-        }
-        setManualCart([...manualCart, { ...newItem }]);
-        setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '0' });
-        setSelectedMaterialId('');
-
-        // Enfocar el Combobox de Material después de agregar
-        setTimeout(() => {
-            if (materialComboboxRef.current) {
-                const button = materialComboboxRef.current.querySelector('button');
-                if (button) button.focus();
-            }
-        }, 100);
-    };
-
-    const removeManualItem = (idx) => {
-        setManualCart(manualCart.filter((_, i) => i !== idx));
-    };
-
-    const handleSubmitAssigned = async () => {
-        if (!selectedWarehouse) {
-            toast.error("Selecciona bodega.");
-            return;
-        }
-        if (!assignedForm.client_name) {
-            toast.error("Selecciona Cliente.");
-            return;
-        }
-        if (!assignedForm.project_name) {
-            toast.error("Selecciona Proyecto.");
-            return;
-        }
-        if (!assignedForm.document_number) {
-            toast.error("Falta N° Guía.");
-            return;
-        }
-        if (manualCart.length === 0) {
-            toast.error("Carrito vacío.");
-            return;
-        }
-
-        setProcessing(true);
         try {
-            let docUrl = null;
-            if (receiptFile) {
-                const fileName = `MAN-${Date.now()}.${receiptFile.name.split('.').pop()}`;
-                await supabase.storage.from('documents').upload(fileName, receiptFile);
-                docUrl = fileName;
-            }
-
-            for (const item of manualCart) {
-                let productId = null;
-                const { data: existingProd } = await supabase.from('products')
-                    .select('id, current_stock').eq('code', item.code).maybeSingle();
-
-                if (existingProd) {
-                    productId = existingProd.id;
-                    await supabase.from('products').update({
-                        price: item.price,
-                        current_stock: Number(existingProd.current_stock) + Number(item.quantity)
-                    }).eq('id', productId);
-                } else {
-                    const { data: newProd } = await supabase.from('products').insert({
-                        code: item.code, name: item.name ? item.name.toUpperCase() : item.name, unit: item.unit,
-                        price: item.price, current_stock: item.quantity
-                    }).select().single();
-                    productId = newProd.id;
-                }
-
-                await supabase.from('movements').insert({
-                    type: 'INBOUND',
-                    warehouse_id: selectedWarehouse,
-                    product_id: productId,
-                    quantity: item.quantity,
-                    unit_price: item.price,
-                    document_number: assignedForm.document_number,
-                    client_owner: assignedForm.client_name,
-                    project_id: assignedForm.project_name,
-                    supplier_id: assignedForm.supplier_name,
-                    reception_document_url: docUrl,
-                    other_data: `Guía: ${assignedForm.document_number} | Prov: ${assignedForm.supplier_name || '-'}`,
-                    comments: `Ingreso Asignado | ${assignedForm.project_name}`,
-                    user_email: user?.email
-                });
-            }
-
-            toast.success("✅ Ingreso Asignado Guardado.");
-            setManualCart([]);
-            setAssignedForm({ client_name: '', project_name: '', document_number: '', supplier_name: '' });
-            setReceiptFile(null);
-            setSelectedMaterialId('');
-            setNewItem({ code: '', name: '', quantity: '', unit: 'UN', price: '0' });
-            setClientCatalog([]);
-
-            // Scroll suave al inicio para volver al selector de cliente
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        } catch (err) {
-            console.error(err);
-            toast.error("Error: " + err.message);
-        } finally {
-            setProcessing(false);
+            const { error } = await supabase.rpc('delete_direct_reception', { p_document_number: docNumber });
+            if (error) throw error;
+            toast.success("Ingreso eliminado correctamente");
+            fetchReceptions();
+        } catch (error) {
+            toast.error("Error al eliminar: " + error.message);
         }
     };
 
-    // ===== Helpers para INGRESO DIRECTO =====
-    const formatQuantity = (value) => {
-        if (!value) return '';
-        const num = parseFloat(value);
-        if (isNaN(num)) return '';
-        return num.toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const handleOpenPdf = (url, e) => {
+        e.stopPropagation();
+        if (!url) return toast.error("No hay documento adjunto");
+        const { data } = supabase.storage.from('documents').getPublicUrl(url);
+        window.open(data.publicUrl, '_blank');
     };
-
-    const parseQuantity = (formattedValue) => {
-        if (!formattedValue) return '';
-        // Remover separadores de miles (puntos) y reemplazar coma decimal por punto
-        const cleanValue = formattedValue.replace(/\./g, '').replace(',', '.');
-        return cleanValue;
-    };
-
-    const copyDocumentNumberToClipboard = async (docNumber) => {
-        if (!docNumber) return;
-        try {
-            await navigator.clipboard.writeText(docNumber);
-            toast.info(`📋 Número ${docNumber} copiado al portapapeles`, { duration: 2000 });
-        } catch (err) {
-            console.error('Error copiando al portapapeles:', err);
-        }
-    };
-
-    const handleFileChange = (e) => {
-        const f = e?.target?.files?.[0];
-        if (f) {
-            setReceiptFile(f);
-            toast.success(`✅ Documento subido con éxito: ${f.name}`);
-        }
-    };
-
-    const handleAddToDirectCart = () => {
-        if (!selectedProductForDirect || !directLineQuantity || Number(directLineQuantity) <= 0) {
-            toast.error('Faltan datos para agregar la línea.');
-            return;
-        }
-        const prod = products.find(p => p.id === selectedProductForDirect);
-        if (!prod) {
-            toast.error('Producto no válido');
-            return;
-        }
-        setDirectReceiptCart(prev => [...prev, { product: prod, quantity: Number(directLineQuantity) }]);
-        setSelectedProductForDirect('');
-        setDirectLineQuantity('');
-    };
-
-    const handleRemoveFromDirectCart = (idx) => {
-        setDirectReceiptCart(prev => prev.filter((_, i) => i !== idx));
-    };
-
-    const handleSubmitDirect = async () => {
-        // 1. Validaciones finales de seguridad
-        if (directReceiptCart.length === 0) return toast.warning("⚠️ El carrito está vacío.");
-        if (!selectedWarehouse) return toast.error("⚠️ Error crítico: Bodega no seleccionada.");
-        if (!selectedProject) return toast.error("⚠️ Error crítico: Origen no seleccionado.");
-
-        // 2. REGLA: Advertencia de Archivo Faltante
-        if (!receiptFile) {
-            const confirmNoFile = window.confirm(
-                "⚠️ ADVERTENCIA:\n\nEstás a punto de guardar un ingreso SIN un documento de respaldo adjunto (guía/factura).\n\n¿Estás seguro de que deseas continuar?"
-            );
-            if (!confirmNoFile) return;
-        }
-
-        // Si pasa las validaciones, procedemos...
-        setProcessing(true);
-
-        // Usamos toast.promise para feedback visual del proceso largo
-        toast.promise(
-            new Promise(async (resolve, reject) => {
-                try {
-                    // A. Subir archivo si existe
-                    let docUrl = null;
-                    if (receiptFile) {
-                        const fileName = `DIRECT-${directInputs.documentNumber}-${Date.now()}.${receiptFile.name.split('.').pop()}`;
-                        const { error: uploadError } = await supabase.storage
-                            .from('documents')
-                            .upload(fileName, receiptFile);
-                        if (uploadError) throw uploadError;
-                        docUrl = fileName;
-                    }
-
-                    // B. Preparar el payload para el RPC
-                    const itemsToProcess = directReceiptCart.map(item => ({
-                        codigo: item.product.code,
-                        descripcion: item.product.name,
-                        unidad: item.product.unit || 'UN',
-                        cantidad: Number(item.quantity),
-                        precio: 0,
-                        art_corr: 'DIRECT'
-                    }));
-
-                    // C. Obtener nombre del proyecto/cliente para observaciones
-                    const projectData = projectsDB.find(p => p.id === Number(selectedProject));
-                    const originName = projectData ? `${projectData.proyecto} (${projectData.cliente})` : 'Origen Desconocido';
-
-                    // D. LLAMADA ATÓMICA AL RPC
-                    const { error: rpcError } = await supabase.rpc('receive_oc_items', {
-                        p_warehouse_id: selectedWarehouse,
-                        p_oc_number: 'DIRECTO',
-                        p_document_number: directInputs.documentNumber,
-                        p_doc_url: docUrl,
-                        p_global_obs: `Ingreso Directo desde: ${originName}. ${directInputs.comments || ''}`,
-                        p_user_email: user?.email,
-                        p_items: itemsToProcess
-                    });
-
-                    if (rpcError) throw rpcError;
-
-                    // E. Limpieza post-éxito
-                    setDirectReceiptCart([]);
-                    setDirectInputs({ documentNumber: '', comments: '' });
-                    setReceiptFile(null);
-
-                    resolve(`Ingreso ${directInputs.documentNumber} registrado correctamente.`);
-
-                } catch (err) {
-                    console.error(err);
-                    reject(err.message || "Error al procesar el ingreso.");
-                }
-            }),
-            {
-                loading: 'Guardando ingreso directo...',
-                success: (msg) => `✅ ${msg}`,
-                error: (msg) => `❌ ${msg}`
-            }
-        ).finally(() => setProcessing(false));
-    };
-
 
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
-
-            {/* PASO 1: SELECCIÓN BODEGA */}
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex items-center gap-3 mb-4">
-                    <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600 font-bold text-sm">1</div>
-                    <h3 className="font-bold text-slate-800">Bodega de Destino</h3>
+            {/* Header */}
+            <div className="flex flex-col md:flex-row justify-between items-end gap-4">
+                <div>
+                    <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                        <ArrowDownCircle className="text-emerald-600" /> Recepción de Materiales
+                    </h1>
+                    <p className="text-sm text-slate-500 font-medium mt-1">Gestión y control de ingresos a bodega</p>
                 </div>
-                <Combobox
-                    options={warehouses}
-                    value={selectedWarehouse}
-                    onChange={setSelectedWarehouse}
-                    placeholder="-- Seleccionar Bodega --"
+                <button
+                    onClick={() => setIsFormOpen(true)}
+                    className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all flex items-center gap-2"
+                >
+                    <Plus size={20} /> Nuevo Ingreso
+                </button>
+            </div>
+
+            {/* Search Bar */}
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center gap-4">
+                <Search className="text-slate-400" size={20} />
+                <input
+                    type="text"
+                    placeholder="Buscar por N° Guía, Proyecto, Proveedor..."
+                    className="w-full outline-none text-slate-700 font-medium"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
                 />
             </div>
 
-            {/* PASO 2: TIPO DE INGRESO */}
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex items-center gap-3 mb-4">
-                    <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600 font-bold text-sm">2</div>
-                    <h3 className="font-bold text-slate-800">Tipo de Ingreso</h3>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Card OC */}
-                    <button
-                        onClick={() => setActiveTab('OC')}
-                        className={`p-5 rounded-xl border-2 text-left transition-all group ${activeTab === 'OC'
-                            ? 'border-emerald-500 bg-emerald-50 shadow-lg'
-                            : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50'
-                            }`}
-                    >
-                        <div className="flex items-start gap-4">
-                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${activeTab === 'OC' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-400 group-hover:bg-emerald-100 group-hover:text-emerald-600'
-                                }`}>
-                                <ShoppingCart size={24} />
-                            </div>
-                            <div>
-                                <h4 className={`font-bold ${activeTab === 'OC' ? 'text-emerald-700' : 'text-slate-700'}`}>Orden de Compra</h4>
-                                <p className="text-sm text-slate-500 mt-1">Recepción contra OC del sistema de adquisiciones</p>
-                            </div>
-                        </div>
-                    </button>
-
-                    {/* Card Material Asignado */}
-                    <button
-                        onClick={() => setActiveTab('ASSIGNED')}
-                        className={`p-5 rounded-xl border-2 text-left transition-all group ${activeTab === 'ASSIGNED'
-                            ? 'border-purple-500 bg-purple-50 shadow-lg'
-                            : 'border-slate-200 hover:border-purple-300 hover:bg-purple-50/50'
-                            }`}
-                    >
-                        <div className="flex items-start gap-4">
-                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${activeTab === 'ASSIGNED' ? 'bg-purple-500 text-white' : 'bg-slate-100 text-slate-400 group-hover:bg-purple-100 group-hover:text-purple-600'
-                                }`}>
-                                <Package size={24} />
-                            </div>
-                            <div>
-                                <h4 className={`font-bold ${activeTab === 'ASSIGNED' ? 'text-purple-700' : 'text-slate-700'}`}>Material Asignado</h4>
-                                <p className="text-sm text-slate-500 mt-1">Ingreso valorizado de materiales asignados</p>
-                            </div>
-                        </div>
-                    </button>
-                </div>
+            {/* Tabla */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
+                        <tr>
+                            <th className="px-6 py-4">Fecha</th>
+                            <th className="px-6 py-4">Documento / Proyecto</th>
+                            <th className="px-6 py-4">Proveedor</th>
+                            <th className="px-6 py-4 text-center">Items</th>
+                            <th className="px-6 py-4 text-center">PDF</th>
+                            <th className="px-6 py-4 text-right">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {loading ? (
+                            <tr><td colSpan="6" className="py-20 text-center"><Loader className="animate-spin mx-auto text-emerald-500" /></td></tr>
+                        ) : filteredData.length === 0 ? (
+                            <tr><td colSpan="6" className="py-20 text-center text-slate-400 font-medium">No se encontraron ingresos registrados.</td></tr>
+                        ) : (
+                            filteredData.map((rec, idx) => (
+                                <tr
+                                    key={idx}
+                                    onDoubleClick={() => setSelectedReception(rec)}
+                                    className="hover:bg-slate-50 transition-colors cursor-pointer group"
+                                >
+                                    <td className="px-6 py-4 font-medium text-slate-600">
+                                        {new Date(rec.date).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                        <div className="text-[10px] text-slate-400">{new Date(rec.date).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <div className="font-bold text-slate-800">{rec.document_number}</div>
+                                        <div className="text-xs text-emerald-600 font-bold">{rec.project_name}</div>
+                                    </td>
+                                    <td className="px-6 py-4 font-medium">
+                                        {rec.document_number?.startsWith('ADJ-') ? (
+                                            <span className="text-amber-600 bg-amber-50 px-2 py-1 rounded-lg text-xs font-bold">
+                                                📦 Ajuste Inventario
+                                            </span>
+                                        ) : rec.supplier_name === 'Proveedor General' ? (
+                                            <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded-lg text-xs font-bold">
+                                                📥 Ingreso Directo
+                                            </span>
+                                        ) : (
+                                            <span className="text-slate-700">{rec.supplier_name}</span>
+                                        )}
+                                    </td>
+                                    <td className="px-6 py-4 text-center">
+                                        <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold">{rec.total_items}</span>
+                                    </td>
+                                    <td className="px-6 py-4 text-center">
+                                        {rec.reception_document_url ? (
+                                            <button
+                                                onClick={(e) => handleOpenPdf(rec.reception_document_url, e)}
+                                                className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-full transition-colors"
+                                                title="Ver PDF"
+                                            >
+                                                <FileText size={18} />
+                                            </button>
+                                        ) : (
+                                            <span className="text-slate-300">-</span>
+                                        )}
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                        {rec.status === 'PENDING_STORAGE' && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleDelete(rec.document_number); }}
+                                                className="p-2 hover:bg-red-50 text-red-500 rounded-lg transition-all"
+                                                title="Eliminar"
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
             </div>
 
-            {/* --- PESTAÑA OC --- */}
-            {activeTab === 'OC' && (
-                <div className="space-y-6 animate-in fade-in">
-                    {!selectedWarehouse ? (
-                        <div className="bg-amber-50 border border-amber-300 p-8 rounded-xl flex items-center gap-4">
-                            <AlertTriangle className="text-amber-600" size={32} />
-                            <div>
-                                <p className="font-bold text-amber-900 text-lg">Selección de Bodega Requerida</p>
-                                <p className="text-sm text-amber-700 mt-1">Debes seleccionar una bodega antes de continuar con el ingreso.</p>
-                            </div>
-                        </div>
-                    ) : (
-                        <>
-                            {/* PASO 3: BÚSQUEDA OC */}
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                                <div className="flex items-center gap-3 mb-4">
-                                    <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center text-emerald-600 font-bold text-sm">3</div>
-                                    <h3 className="font-bold text-slate-800">Buscar Orden de Compra</h3>
-                                </div>
-                                <p className="text-sm text-slate-500 mb-4">Ingresa el número y el sistema buscará automáticamente en adquisiciones</p>
-                                <GoogleSearchBar
-                                    type="number"
-                                    placeholder="Ej: 4500123"
-                                    loading={loading}
-                                    onSearch={(val) => handleSearchOC(val)}
-                                />
-                            </div>
-
-                            {ocData && (
-                                <div className="space-y-6">
-                                    <div className="bg-white p-4 rounded-lg border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                                        <div><span className="block text-xs text-slate-400 font-bold uppercase">Proveedor</span><div className="font-bold text-slate-700 flex items-center gap-2"><Building size={16} /> {ocHeader?.proveedor}</div></div>
-                                        <div><span className="block text-xs text-slate-400 font-bold uppercase">Fecha</span><div className="font-bold text-slate-700 flex items-center gap-2"><Calendar size={16} /> {ocHeader?.fecha}</div></div>
-                                        <div><span className="block text-xs text-slate-400 font-bold uppercase">Total Líneas</span><div className="font-bold text-slate-700">{ocData.length} Ítems</div></div>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-white p-4 rounded-lg border border-slate-200">
-                                        <div>
-                                            <Combobox
-                                                options={projectsDB.map(p => ({ id: p.proyecto, name: `${p.proyecto} (${p.cliente})` }))}
-                                                value={ocProject}
-                                                onChange={setOcProject}
-                                                placeholder="-- Seleccionar Proyecto --"
-                                                label="Asignar a Proyecto *"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">N° Guía / Factura *</label>
-                                            <input
-                                                type="text"
-                                                className="w-full px-3 py-2 border rounded-lg outline-none focus:border-blue-500 font-bold"
-                                                onChange={(e) => setOcInputs(p => ({ ...p, global_doc: e.target.value }))}
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Adjuntar Respaldo</label>
-                                            <label
-                                                onClick={() => copyDocumentNumberToClipboard(ocInputs['global_doc'])}
-                                                className={`flex items-center justify-center gap-2 w-full px-3 py-2 border border-dashed rounded-lg cursor-pointer transition-all ${receiptFile ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'hover:bg-slate-50 border-slate-300'
-                                                    }`}>
-                                                {receiptFile ? <CheckCircle size={18} className="text-emerald-600" /> : <Paperclip size={18} className="text-slate-400" />}
-                                                <span className="text-sm font-bold">
-                                                    {receiptFile ? '📄 Documento Anexado' : 'Subir PDF...'}
-                                                </span>
-                                                <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={handleFileChange} />
-                                            </label>
-                                            {receiptFile && <p className="text-[10px] text-emerald-600 mt-1 font-medium truncate">{receiptFile.name}</p>}
-                                        </div>
-                                    </div>
-
-                                    <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white">
-                                        <table className="w-full text-sm text-left">
-                                            <thead className="bg-slate-100 text-slate-600 uppercase text-xs">
-                                                <tr>
-                                                    <th className="px-4 py-3">Item</th><th className="px-4 py-3 text-center">Total OC</th><th className="px-4 py-3 text-center">Pendiente</th><th className="px-4 py-3 text-center bg-blue-50 w-24">Recibir</th><th className="px-4 py-3 text-center bg-green-50 w-28">Precio ($)</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-100">
-                                                {ocData.map((line) => {
-                                                    const received = ocHistory[line.art_corr] || 0;
-                                                    const pending = line.cantidad - received;
-                                                    const isComplete = pending <= 0;
-                                                    const currentInput = ocInputs[line.art_corr] || {};
-                                                    return (
-                                                        <tr key={line.id} className={isComplete ? 'bg-slate-50 opacity-60' : ''}>
-                                                            <td className="px-4 py-3 font-bold">{line.descripcion}</td>
-                                                            <td className="px-4 py-3 text-center">{line.cantidad}</td>
-                                                            <td className="px-4 py-3 text-center text-orange-600">{pending > 0 ? pending : 0}</td>
-                                                            <td className="px-4 py-2 bg-blue-50/30"><input type="number" min="0" max={pending} disabled={isComplete} className="w-full text-center border rounded font-bold" value={currentInput.quantity || ''} onChange={(e) => setOcInputs(p => ({ ...p, [line.art_corr]: { ...p[line.art_corr], quantity: e.target.value } }))} /></td>
-                                                            <td className="px-4 py-2 bg-green-50/30"><input type="number" disabled={isComplete} className="w-full text-right border rounded text-green-700" value={currentInput.price || ''} onChange={(e) => setOcInputs(p => ({ ...p, [line.art_corr]: { ...p[line.art_corr], price: e.target.value } }))} /></td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
-                                    </div>
-
-                                    <div className="flex justify-end pt-4 border-t border-slate-200">
-                                        <button
-                                            onClick={handleSubmitOC}
-                                            disabled={processing || !selectedWarehouse || !ocInputs['global_doc']}
-                                            className={`px-8 py-3 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2
-                                    ${(processing || !selectedWarehouse || !ocInputs['global_doc'])
-                                                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                                                    : 'bg-blue-600 text-white hover:bg-blue-700 hover:scale-105'
-                                                }`}>
-                                            {processing ? <Loader className="animate-spin" /> : <><CheckCircle size={20} /> Confirmar Recepción</>}
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </>
-                    )}
-                </div>
+            {/* Modal de Detalle (Existente) */}
+            {selectedReception && (
+                <DirectInboundDetailModal
+                    reception={selectedReception}
+                    onClose={() => { setSelectedReception(null); fetchReceptions(); }}
+                />
             )}
 
-            {/* --- PESTAÑA ASIGNADO --- */}
-            {activeTab === 'ASSIGNED' && (
-                <div className="space-y-6 animate-in fade-in">
-                    {!selectedWarehouse ? (
-                        <div className="bg-amber-50 border border-amber-300 p-8 rounded-xl flex items-center gap-4">
-                            <AlertTriangle className="text-amber-600" size={32} />
-                            <div>
-                                <p className="font-bold text-amber-900 text-lg">Selección de Bodega Requerida</p>
-                                <p className="text-sm text-amber-700 mt-1">Debes seleccionar una bodega antes de continuar con el ingreso.</p>
-                            </div>
-                        </div>
-                    ) : (
-                        <>
-                            {/* REJILLA MEJORADA: Ahora usamos 3 columnas para controlar los anchos */}
-                            <div className="bg-white p-5 rounded-xl shadow-sm border border-purple-100 grid grid-cols-1 md:grid-cols-3 gap-4">
-
-                                {/* LÍNEA 1: Cliente (1/3) y Proyecto (2/3) */}
-                                <div className="md:col-span-1">
-                                    <Combobox
-                                        options={clientsList.map((c, idx) => ({ id: `client_${idx}_${c}`, name: c }))}
-                                        value={assignedForm.client_name ? clientsList.map((c, idx) => `client_${idx}_${c}`).find(id => id.endsWith(assignedForm.client_name)) : ''}
-                                        onChange={(val) => { const name = val.split('_').slice(2).join('_'); setAssignedForm({ ...assignedForm, client_name: name, project_name: '' }); setClientCatalog([]); }}
-                                        placeholder="-- Seleccionar Cliente --"
-                                        label="Cliente"
-                                    />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <Combobox
-                                        options={filteredProjects.map((p, idx) => ({ id: `project_${idx}_${p.proyecto}`, name: p.proyecto }))}
-                                        value={assignedForm.project_name ? filteredProjects.map((p, idx) => `project_${idx}_${p.proyecto}`).find(id => id.endsWith(assignedForm.project_name)) : ''}
-                                        onChange={(val) => { const name = val.split('_').slice(2).join('_'); setAssignedForm({ ...assignedForm, project_name: name }); }}
-                                        placeholder={assignedForm.client_name ? '-- Seleccionar Proyecto --' : '-- Primero Cliente --'}
-                                        label="Proyecto"
-                                        disabled={!assignedForm.client_name}
-                                    />
-                                </div>
-
-                                {/* LÍNEA 2: Proveedor (2/3) y Documento (1/3) */}
-                                {/* Proveedor ahora es el doble de ancho que Cliente (2 col vs 1 col) */}
-                                <div className="md:col-span-2">
-                                    <Combobox
-                                        options={suppliersDB.map((s, idx) => ({ id: `supplier_${idx}_${s.nombre}`, name: s.nombre }))}
-                                        value={assignedForm.supplier_name ? suppliersDB.map((s, idx) => `supplier_${idx}_${s.nombre}`).find(id => id.endsWith(assignedForm.supplier_name)) : ''}
-                                        onChange={(val) => { const name = val.split('_').slice(2).join('_'); setAssignedForm({ ...assignedForm, supplier_name: name }); }}
-                                        placeholder="-- Seleccionar Proveedor --"
-                                        label="Proveedor"
-                                    />
-                                </div>
-                                <div className="md:col-span-1">
-                                    <label className="text-xs font-bold text-slate-400 block mb-1">N° Guía / Documento</label>
-                                    <input
-                                        type="text"
-                                        className="w-full border p-2 rounded-lg font-bold focus:border-purple-500 outline-none"
-                                        placeholder="Ej: 12345"
-                                        value={assignedForm.document_number}
-                                        onChange={e => setAssignedForm({ ...assignedForm, document_number: e.target.value })}
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="bg-purple-50 p-5 rounded-xl border border-purple-100 grid grid-cols-12 gap-3 mb-4">
-                                <div className="col-span-4" ref={materialComboboxRef}>
-                                    <Combobox
-                                        options={clientCatalog.map(m => ({ id: m.id, name: `${m.description} (${m.code})` }))}
-                                        value={selectedMaterialId}
-                                        onChange={handleMaterialSelect}
-                                        placeholder="-- Seleccionar Material --"
-                                        label={`Material ${assignedForm.client_name ? '(' + assignedForm.client_name + ')' : ''}`}
-                                    />
-                                </div>
-                                <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Código</label><input type="text" className="w-full p-2 rounded border border-purple-200 bg-slate-50 text-slate-500 cursor-not-allowed" placeholder="Auto" value={newItem.code} readOnly tabIndex="-1" /></div>
-                                <div className="col-span-2"><label className="text-[10px] font-bold text-purple-700 uppercase">Cant.</label><input ref={quantityInputRef} type="text" inputMode="decimal" className="w-full p-2 rounded border border-purple-200 font-bold text-center" placeholder="0,00" value={newItem.quantity} onChange={e => setNewItem({ ...newItem, quantity: e.target.value })} onBlur={e => setNewItem({ ...newItem, quantity: parseQuantity(e.target.value) })} onFocus={e => e.target.select()} /></div>
-                                <div className="col-span-2"><label className="text-[10px] font-bold text-green-700 uppercase">Precio ($)</label><input type="number" className="w-full p-2 rounded border border-green-200 font-bold text-green-800" placeholder="0" value={newItem.price} onChange={e => setNewItem({ ...newItem, price: e.target.value })} /></div>
-                                <div className="col-span-2 flex items-end"><button onClick={addManualItem} className="w-full bg-purple-600 text-white p-2 rounded-lg font-bold hover:bg-purple-700 flex justify-center gap-1"><Plus size={18} /> Agregar</button></div>
-                            </div>
-
-                            <div className="bg-white border rounded-xl overflow-hidden shadow-sm">
-                                <table className="w-full text-sm">
-                                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
-                                        <tr><th className="px-4 py-3 text-left">Material</th><th className="px-4 py-3 text-center">Cant</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Total</th><th className="px-4 py-3"></th></tr>
-                                    </thead>
-                                    <tbody className="divide-y">
-                                        {manualCart.map((item, idx) => (
-                                            <tr key={idx}><td className="px-4 py-3 font-bold">{item.name} <span className="font-normal text-xs">({item.code})</span></td><td className="px-4 py-3 text-center">{formatQuantity(item.quantity)} {item.unit}</td><td className="px-4 py-3 text-right text-green-700">${item.price}</td><td className="px-4 py-3 text-right font-black">${(parseFloat(item.quantity) * parseFloat(item.price)).toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td className="px-4 py-3 text-center"><button onClick={() => removeManualItem(idx)} className="text-red-400 hover:text-red-600"><Trash2 size={16} /></button></td></tr>
-                                        ))}
-                                        {manualCart.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400">Carrito vacío</td></tr>}
-                                    </tbody>
-                                    {manualCart.length > 0 && <tfoot className="bg-slate-50"><tr><td colSpan="3" className="px-4 py-3 text-right font-bold uppercase text-slate-500">Total:</td><td className="px-4 py-3 text-right font-black text-lg text-green-700">${manualCart.reduce((sum, i) => sum + (parseFloat(i.quantity) * parseFloat(i.price)), 0).toLocaleString('es-CL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td></td></tr></tfoot>}
-                                </table>
-                                <div className="p-4 bg-slate-50 border-t flex justify-between items-center">
-                                    <div>
-                                        <label
-                                            onClick={() => copyDocumentNumberToClipboard(assignedForm.document_number)}
-                                            className={`flex items-center gap-2 cursor-pointer border px-4 py-2 rounded-lg transition-all ${receiptFile ? 'bg-emerald-50 border-emerald-400 text-emerald-700' : 'bg-white hover:bg-slate-50 border-slate-300'
-                                                }`}>
-                                            {receiptFile ? <CheckCircle size={18} className="text-emerald-600" /> : <UploadCloud size={18} className="text-purple-500" />}
-                                            <span className="text-xs font-bold">
-                                                {receiptFile ? '📄 Documento Anexado' : 'Adjuntar Doc'}
-                                            </span>
-                                            <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={handleFileChange} />
-                                        </label>
-                                        {receiptFile && <p className="text-[10px] text-emerald-600 mt-1 font-medium ml-1">{receiptFile.name}</p>}
-                                    </div>
-                                    <button onClick={handleSubmitAssigned} disabled={processing || manualCart.length === 0} className="bg-purple-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-black shadow-lg disabled:opacity-50">{processing ? <Loader className="animate-spin" /> : 'Confirmar Ingreso'}</button>
-                                </div>
-                            </div>
-                        </>
-                    )}
-                </div>
+            {/* Modal de Nuevo Ingreso (Nuevo) */}
+            {isFormOpen && (
+                <InboundReceptionForm
+                    onClose={() => setIsFormOpen(false)}
+                    onSuccess={() => { setIsFormOpen(false); fetchReceptions(); }}
+                />
             )}
         </div>
     );

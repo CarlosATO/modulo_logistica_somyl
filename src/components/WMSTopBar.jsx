@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, UserCircle, Box, ChevronRight, Menu } from 'lucide-react';
+import { UserCircle, Box, ChevronRight, Menu } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function WMSTopBar({ onMenuClick }) {
@@ -56,13 +56,7 @@ export default function WMSTopBar({ onMenuClick }) {
           <Menu size={22} />
         </button>
 
-        <button
-          onClick={handleBack}
-          className="hidden lg:flex text-slate-400 hover:text-slate-800 hover:bg-slate-100 p-2 rounded-full transition-colors"
-          title={location.pathname === '/gestion' ? "Salir al Menú Principal" : "Volver al Panel"}
-        >
-          <ArrowLeft size={20} />
-        </button>
+
 
         <div className="flex items-center gap-2 text-sm">
           <span className="hidden md:flex text-slate-500 font-medium items-center gap-1">

@@ -7,7 +7,7 @@ import TransferPDF from '../components/TransferPDF';
 import CreateTransferModal from './CreateTransferModal';
 import {
     ArrowRightLeft, Search, Plus, FileText, X,
-    Calendar, User, MapPin, ChevronRight, Loader, History
+    Calendar, User, MapPin, ChevronRight, Loader, History, Trash2, FileSpreadsheet
 } from 'lucide-react';
 
 export default function TransferMaterial() {
@@ -122,6 +122,40 @@ export default function TransferMaterial() {
             date: new Date(transfer.created_at).toLocaleDateString()
         };
     };
+    const handleDeleteTransfer = async () => {
+        if (!selectedTransfer) return;
+        const confirm = window.confirm(`ADVERTENCIA: ¿Estás seguro de eliminar el traspaso ${selectedTransfer.transfer_number}?\n\nAl confirmar:\n1. Se eliminará el registro histórico.\n2. Se revertirán los movimientos contables, lo que generará una diferencia positiva en la Bodega de origen.\n3. Deberás ubicar los materiales desde la pantalla de "Put Away".`);
+        if (!confirm) return;
+
+        setLoading(true);
+        try {
+            // 1. Eliminar Movimientos (Orphan removal)
+            const { error: moveError } = await supabase
+                .from('movements')
+                .delete()
+                .eq('transfer_number', selectedTransfer.transfer_number);
+
+            if (moveError) throw moveError;
+
+            // 2. Eliminar Registro Maestro
+            const { error: transError } = await supabase
+                .from('transfers')
+                .delete()
+                .eq('id', selectedTransfer.id);
+
+            if (transError) throw transError;
+
+            alert("Traspaso eliminado correctamente.");
+            setSelectedTransfer(null);
+            fetchTransfers();
+
+        } catch (error) {
+            console.error("Error deleting transfer:", error);
+            alert("Error al eliminar: " + error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
@@ -144,6 +178,12 @@ export default function TransferMaterial() {
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                     </div>
+                    <button
+                        onClick={() => navigate('/gestion/traspasos/reporte')}
+                        className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-emerald-700 shadow-sm flex items-center gap-2 text-sm transition-all"
+                    >
+                        <FileSpreadsheet size={16} /> Ver Informe
+                    </button>
                     <button
                         onClick={() => setIsCreateModalOpen(true)}
                         className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-indigo-700 shadow-sm flex items-center gap-2 text-sm transition-all"
@@ -319,6 +359,14 @@ export default function TransferMaterial() {
                                         )}
                                     </PDFDownloadLink>
                                 )}
+
+                                <button
+                                    onClick={handleDeleteTransfer}
+                                    disabled={loading}
+                                    className="w-full bg-slate-100 text-slate-500 py-3 rounded-xl font-bold hover:bg-red-50 hover:text-red-500 flex justify-center items-center gap-2 transition-colors mt-3"
+                                >
+                                    <Trash2 size={18} /> Eliminar Traspaso
+                                </button>
                             </div>
                         </>
                     )}

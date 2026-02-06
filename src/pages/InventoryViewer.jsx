@@ -283,8 +283,8 @@ export default function InventoryViewer() {
 
         return sorted.map(mov => {
             const qty = Number(mov.quantity);
-            if (mov.type === 'INBOUND' || mov.type === 'TRANSFER_IN') runningBalance += qty;
-            else if (mov.type === 'OUTBOUND' || mov.type === 'TRANSFER_OUT') runningBalance -= qty;
+            if (['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(mov.type)) runningBalance += qty;
+            else if (['OUTBOUND', 'TRANSFER_OUT', 'DECREASE'].includes(mov.type)) runningBalance -= qty;
             return { ...mov, balance: runningBalance };
         }).filter(m => showPutawayMovements || m.type !== 'PUTAWAY')
             .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // Orden inverso para visualización
@@ -601,16 +601,16 @@ export default function InventoryViewer() {
                                                         onClick={() => setSelectedMovement(mov)}
                                                         className="bg-white border border-slate-200 rounded-lg p-3 hover:shadow-md transition-shadow relative overflow-hidden group cursor-pointer hover:border-blue-300"
                                                     >
-                                                        <div className={`absolute left-0 top-0 bottom-0 w-1 ${mov.type.includes('IN') || mov.type === 'INBOUND' ? 'bg-emerald-500' : 'bg-orange-500'}`} />
+                                                        <div className={`absolute left-0 top-0 bottom-0 w-1 ${['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(mov.type) ? 'bg-emerald-500' : 'bg-orange-500'}`} />
 
                                                         <div className="flex justify-between items-start gap-3">
                                                             <div className="flex items-start gap-3">
-                                                                <div className={`mt-1 w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center ${mov.type.includes('IN') || mov.type === 'INBOUND' ? 'bg-emerald-50 text-emerald-600' : 'bg-orange-50 text-orange-600'}`}>
-                                                                    {mov.type.includes('IN') || mov.type === 'INBOUND' ? <ArrowDownCircle size={16} /> : <ArrowUpCircle size={16} />}
+                                                                <div className={`mt-1 w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center ${['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(mov.type) ? 'bg-emerald-50 text-emerald-600' : 'bg-orange-50 text-orange-600'}`}>
+                                                                    {['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(mov.type) ? <ArrowDownCircle size={16} /> : <ArrowUpCircle size={16} />}
                                                                 </div>
                                                                 <div>
                                                                     <div className="flex items-center gap-2 mb-1">
-                                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${mov.type.includes('IN') || mov.type === 'INBOUND' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-orange-50 border-orange-100 text-orange-700'}`}>
+                                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(mov.type) ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-orange-50 border-orange-100 text-orange-700'}`}>
                                                                             {translateMovementType(mov.type)}
                                                                         </span>
                                                                         <span className="text-[10px] text-slate-400 font-medium">
@@ -623,8 +623,8 @@ export default function InventoryViewer() {
                                                             </div>
 
                                                             <div className="text-right">
-                                                                <p className={`text-sm font-black ${mov.type.includes('IN') || mov.type === 'INBOUND' ? 'text-emerald-600' : 'text-orange-600'}`}>
-                                                                    {mov.type.includes('IN') || mov.type === 'INBOUND' ? '+' : '-'}{Math.abs(mov.quantity)}
+                                                                <p className={`text-sm font-black ${['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(mov.type) ? 'text-emerald-600' : 'text-orange-600'}`}>
+                                                                    {['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(mov.type) ? '+' : '-'}{Math.abs(mov.quantity)}
                                                                 </p>
                                                                 <div className="text-[9px] text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded inline-block mt-1">
                                                                     Saldo: <strong>{mov.balance}</strong>
@@ -664,10 +664,10 @@ export default function InventoryViewer() {
 
                     <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in zoom-in-50 duration-200">
                         {/* Modal Header */}
-                        <div className={`px-6 py-4 border-b flex items-center justify-between ${selectedMovement.type.includes('IN') || selectedMovement.type === 'INBOUND' ? 'bg-emerald-50 border-emerald-100' : 'bg-orange-50 border-orange-100'}`}>
+                        <div className={`px-6 py-4 border-b flex items-center justify-between ${['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(selectedMovement.type) ? 'bg-emerald-50 border-emerald-100' : 'bg-orange-50 border-orange-100'}`}>
                             <div className="flex items-center gap-3">
-                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${selectedMovement.type.includes('IN') || selectedMovement.type === 'INBOUND' ? 'bg-emerald-100 text-emerald-600' : 'bg-orange-100 text-orange-600'}`}>
-                                    {selectedMovement.type.includes('IN') || selectedMovement.type === 'INBOUND' ? <ArrowDownCircle size={24} /> : <ArrowUpCircle size={24} />}
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(selectedMovement.type) ? 'bg-emerald-100 text-emerald-600' : 'bg-orange-100 text-orange-600'}`}>
+                                    {['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(selectedMovement.type) ? <ArrowDownCircle size={24} /> : <ArrowUpCircle size={24} />}
                                 </div>
                                 <div>
                                     <p className="text-xs font-bold opacity-60 uppercase tracking-wider">Detalle de Movimiento</p>
@@ -694,8 +694,8 @@ export default function InventoryViewer() {
                                 </div>
                                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
                                     <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Cantidad</p>
-                                    <p className={`text-xl font-black ${selectedMovement.type.includes('IN') || selectedMovement.type === 'INBOUND' ? 'text-emerald-600' : 'text-orange-600'}`}>
-                                        {selectedMovement.type.includes('IN') || selectedMovement.type === 'INBOUND' ? '+' : '-'}{Math.abs(selectedMovement.quantity)}
+                                    <p className={`text-xl font-black ${['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(selectedMovement.type) ? 'text-emerald-600' : 'text-orange-600'}`}>
+                                        {['INBOUND', 'TRANSFER_IN', 'INCREASE'].includes(selectedMovement.type) ? '+' : '-'}{Math.abs(selectedMovement.quantity)}
                                     </p>
                                     <p className="text-[10px] text-slate-400 font-bold uppercase">Unidades</p>
                                 </div>

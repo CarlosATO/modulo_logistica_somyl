@@ -19,12 +19,13 @@ import InventoryViewer from './pages/InventoryViewer';
 import PutAway from './pages/PutAway';
 import LocationSettings from './pages/LocationSettings';
 import TransferMaterial from './pages/TransferMaterial';
-import DirectInboundList from './pages/DirectInboundList';
+
 import InventoryAdjustments from './pages/InventoryAdjustments';
 import PendingRequests from './pages/PendingRequests';
 
 // --- REPORTES (Desde raíz src, según tu foto) ---
 import InventoryReport from './InventoryReport'; // ✅ Importado desde raíz src/
+import TransferReport from './pages/TransferReport'; // Nuevo Informe Traspasos
 
 // --- CAPTURADOR DE SESIÓN DEL PORTAL ---
 // Este componente invisible lee el token de la URL si viene del portal
@@ -54,6 +55,7 @@ const SSOHandler = () => {
 const GestionLayout = () => {
   const { user, loading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   if (loading) return (
     <div className="h-screen flex items-center justify-center bg-slate-50">
@@ -77,11 +79,16 @@ const GestionLayout = () => {
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans">
-      {/* Sidebar */}
-      <Sidebar isOpen={sidebarOpen} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+      {/* Sidebar con props de colapsar */}
+      <Sidebar
+        isOpen={sidebarOpen}
+        toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+        collapsed={sidebarCollapsed}
+        toggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
 
-      {/* Main Content Area */}
-      <div className="lg:ml-64 transition-all duration-300">
+      {/* Main Content Area con Margen Dinámico */}
+      <div className={`transition-all duration-300 ${sidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'}`}>
         {/* Top Bar */}
         <WMSTopBar onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
 
@@ -124,7 +131,7 @@ export default function App() {
           <Route path="traspasos" element={<TransferMaterial />} />
           <Route path="catalogo" element={<ProductList />} />
           <Route path="ajustes" element={<InventoryAdjustments />} />
-          <Route path="historial-ingresos" element={<DirectInboundList />} />
+
 
           {/* 3. Mantenedores */}
           <Route path="bodegas" element={<WarehouseSettings />} />
@@ -133,6 +140,7 @@ export default function App() {
 
           {/* 4. Reportes */}
           <Route path="reportes" element={<InventoryReport />} />
+          <Route path="traspasos/reporte" element={<TransferReport />} />
 
         </Route>
 

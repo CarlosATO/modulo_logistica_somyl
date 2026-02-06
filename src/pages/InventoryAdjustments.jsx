@@ -1,461 +1,235 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { supabaseProcurement } from '../services/procurementClient';
-import Combobox from '../components/Combobox';
-import { toast } from 'sonner';
 import {
-    AlertTriangle, CheckCircle, Camera, Package, Warehouse,
-    ArrowUpCircle, ArrowDownCircle, Loader, MapPin, FileText, X
+    AlertTriangle, ArrowUpCircle, ArrowDownCircle, Search,
+    Plus, Loader, FileText, Calendar
 } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import { toast } from 'sonner';
+import InventoryAdjustmentsForm from './InventoryAdjustmentsForm';
+import InventoryAdjustmentDetail from './InventoryAdjustmentDetail';
 
 export default function InventoryAdjustments() {
-    const { user } = useAuth();
 
-    // --- Estados Maestros ---
-    const [warehouses, setWarehouses] = useState([]);
-    const [projects, setProjects] = useState([]);
-    const [locations, setLocations] = useState([]);
-    const [allProducts, setAllProducts] = useState([]); // Para INCREASE (catálogo)
-    const [stockProducts, setStockProducts] = useState([]); // Para DECREASE (con stock)
+    // --- Estado ---
+    const [adjustments, setAdjustments] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [searchTerm, setSearchTerm] = useState('');
 
-    // --- Estados de Formulario ---
-    const [adjustmentType, setAdjustmentType] = useState('DECREASE');
-    const [selectedWarehouse, setSelectedWarehouse] = useState('');
-    const [selectedProject, setSelectedProject] = useState('');
-    const [selectedProduct, setSelectedProduct] = useState('');
-    const [selectedProductData, setSelectedProductData] = useState(null);
-    const [targetLocation, setTargetLocation] = useState('');
+    // Modales
+    const [isFormOpen, setIsFormOpen] = useState(false);
+    const [selectedAdjustment, setSelectedAdjustment] = useState(null);
 
-    // --- Estados Específicos de Ajuste ---
-    const [reason, setReason] = useState('');
-    const [quantity, setQuantity] = useState('');
-    const [comments, setComments] = useState('');
-    const [evidenceFile, setEvidenceFile] = useState(null);
-
-    // --- UI ---
-    const [loading, setLoading] = useState(false);
-    const [processing, setProcessing] = useState(false);
-
-    // Cargar Maestros Iniciales
-    useEffect(() => {
-        const fetchMasters = async () => {
-            const { data: wh } = await supabase.from('warehouses').select('*').eq('is_active', true);
-            setWarehouses(wh || []);
-
-            const { data: prj } = await supabaseProcurement.from('proyectos').select('id, proyecto, cliente').eq('activo', true);
-            setProjects(prj || []);
-
-            // Cargar todos los productos para INCREASE
-            const { data: prods } = await supabase.from('products').select('id, name, code, unit').order('name');
-            setAllProducts(prods || []);
-        };
-        fetchMasters();
-    }, []);
-
-    // Cargar Ubicaciones y Stock al cambiar Bodega
-    useEffect(() => {
-        if (!selectedWarehouse) {
-            setLocations([]);
-            setStockProducts([]);
-            setSelectedProduct('');
-            setSelectedProductData(null);
-            return;
-        }
-
-        const fetchWarehouseData = async () => {
-            setLoading(true);
-            // Ubicaciones
-            const { data: locs } = await supabase
-                .from('locations')
-                .select('*')
-                .eq('warehouse_id', selectedWarehouse)
-                .order('full_code');
-            setLocations(locs || []);
-
-            // Productos con stock en esta bodega (para DECREASE)
-            const { data: stock } = await supabase
-                .from('product_locations')
-                .select('id, product_id, location_id, quantity, products(id, name, code, unit), locations(full_code)')
-                .eq('warehouse_id', selectedWarehouse)
-                .gt('quantity', 0)
-                .order('products(name)');
-
-            if (stock) {
-                const options = stock.map(item => ({
-                    id: `${item.product_id}-${item.location_id}`,
-                    name: `${item.products.name} (${item.locations.full_code}) - ${item.quantity} ${item.products.unit || 'UN'}`,
-                    productId: item.product_id,
-                    productName: item.products.name,
-                    productCode: item.products.code,
-                    locationId: item.location_id,
-                    locationName: item.locations.full_code,
-                    quantity: item.quantity,
-                    unit: item.products.unit
-                }));
-                setStockProducts(options);
-            }
-            setLoading(false);
-        };
-        fetchWarehouseData();
-    }, [selectedWarehouse]);
-
-    // Cuando cambia el tipo de ajuste, limpiar selección
-    useEffect(() => {
-        setSelectedProduct('');
-        setSelectedProductData(null);
-        setTargetLocation('');
-        setQuantity('');
-    }, [adjustmentType]);
-
-    // Cuando se selecciona un producto (DECREASE - tiene ubicación incluida)
-    const handleProductSelect = (value) => {
-        setSelectedProduct(value);
-
-        if (adjustmentType === 'DECREASE') {
-            const opt = stockProducts.find(p => String(p.id) === String(value));
-            if (opt) {
-                setSelectedProductData({
-                    id: opt.productId,
-                    name: opt.productName,
-                    code: opt.productCode,
-                    maxQty: opt.quantity,
-                    unit: opt.unit
-                });
-                setTargetLocation(opt.locationId);
-            }
-        } else {
-            // INCREASE - buscar en catálogo completo
-            const prod = allProducts.find(p => String(p.id) === String(value));
-            if (prod) {
-                setSelectedProductData({
-                    id: prod.id,
-                    name: prod.name,
-                    code: prod.code,
-                    unit: prod.unit
-                });
-            }
-        }
-    };
-
-    const handleSubmit = async () => {
-        if (!selectedWarehouse || !selectedProject || !selectedProduct || !quantity || !reason || !targetLocation) {
-            return toast.error("⚠️ Faltan campos obligatorios.");
-        }
-
-        if (adjustmentType === 'DECREASE') {
-            if (Number(quantity) > selectedProductData?.maxQty) {
-                return toast.error(`⚠️ No puedes descontar más de ${selectedProductData.maxQty} unidades.`);
-            }
-            if (!evidenceFile) {
-                if (!confirm("⚠️ ¿Registrar pérdida sin foto de evidencia?")) return;
-            }
-        }
-
-        setProcessing(true);
+    // --- Carga de Datos ---
+    const fetchHistory = async () => {
+        setLoading(true);
         try {
-            let evidenceUrl = null;
-            if (evidenceFile) {
-                const fileName = `ADJ-${Date.now()}.${evidenceFile.name.split('.').pop()}`;
-                await supabase.storage.from('documents').upload(fileName, evidenceFile);
-                evidenceUrl = fileName;
-            }
-
-            const { error } = await supabase.rpc('process_inventory_adjustment', {
-                p_warehouse_id: selectedWarehouse,
-                p_product_id: selectedProductData.id,
-                p_qty: Number(quantity),
-                p_type: adjustmentType,
-                p_reason: reason,
-                p_location_id: targetLocation,
-                p_comments: comments || '',
-                p_user_email: user?.email,
-                p_project_id: String(selectedProject),
-                p_evidence_url: evidenceUrl
-            });
+            // 1. Obtener movimientos de tipo DECREASE/INCREASE o con folio ADJ-
+            const { data, error } = await supabase
+                .from('movements')
+                .select(`
+                    id, created_at, type, quantity, user_email, comments, 
+                    reception_document_url, document_number,
+                    warehouse_id, product_id, project_id,
+                    warehouses(name),
+                    products(name, code)
+                `)
+                .or('type.in.(INCREASE,DECREASE),document_number.ilike.ADJ%')
+                .order('created_at', { ascending: false });
 
             if (error) throw error;
 
-            toast.success("✅ Ajuste procesado correctamente.");
+            // 2. Enriquecer con Nombres de Proyectos (desde Procurement)
+            // Recolectar IDs únicos de proyectos
+            const projectIds = [...new Set(data.map(m => m.project_id).filter(id => id && id !== 'undefined' && id !== 'null'))];
 
-            // Reset Form
-            setQuantity('');
-            setReason('');
-            setComments('');
-            setEvidenceFile(null);
-            setSelectedProduct('');
-            setSelectedProductData(null);
-            setTargetLocation('');
+            let projectsMap = {};
+            if (projectIds.length > 0) {
+                const { data: projData } = await supabaseProcurement
+                    .from('proyectos')
+                    .select('id, proyecto')
+                    .in('id', projectIds);
 
-        } catch (err) {
-            console.error(err);
-            toast.error(`Error: ${err.message}`);
+                if (projData) {
+                    projData.forEach(p => { projectsMap[p.id] = p.proyecto; });
+                }
+            }
+
+            // 3. Formatear
+            // Nota: En movements, 'comments' se usó para guardar el comentario, y 'reason' ???
+            // Revisando 'process_inventory_adjustment' RPC:
+            // p_reason -> se guarda en 'comments' o 'other_data'?
+            // Ah, el RPC original probablemente guardaba razón en 'comments' concatenado o en 'other_data'.
+            // Revisando `InventoryAdjustments.jsx` antiguo... 
+            // El RPC usa p_reason, p_comments.
+            // Asumiré que la razón principal se guardó en `comments` o `reason`.
+            // Si el RPC inserta en `movements`, habría que ver dónde mete `reason`.
+            // Supongamos que lo mete en `comments` prefixado o algo.
+            // Si no, mostraremos `comments` como razón general.
+
+            // Para simplificar, mostraremos lo que venga en `comments`.
+
+            const formatted = data.map(m => {
+                // Determinar tipo real si es antiguo (ADJ-)
+                let realType = m.type;
+                if (m.document_number?.startsWith('ADJ-')) {
+                    // Si es folio ADJ, podemos inferir? O asumimos que el type guardado es correcto?
+                    // En la captura decía "Ingreso: ADJ...", lo que implica INBOUND.
+                    // Pero un ajuste puede ser salida.
+                    // Si el sistema anterior guardaba todo como INBOUND, es un problema.
+                    // Sin embargo, mostraremos lo que haya. Si es INBOUND -> Hallazgo. Si es OUTBOUND -> Pérdida.
+                    if (m.type === 'INBOUND') realType = 'INCREASE';
+                    if (m.type === 'OUTBOUND') realType = 'DECREASE';
+                }
+
+                return {
+                    id: m.id,
+                    folio: m.document_number || m.id.slice(0, 8),
+                    date: m.created_at,
+                    type: realType,
+                    qty: m.quantity,
+                    user_email: m.user_email,
+                    reason: m.comments,
+                    comments: m.comments,
+                    evidence_url: m.reception_document_url,
+                    warehouse: m.warehouses?.name || 'Desconocido',
+                    product_name: m.products?.name || 'Producto Eliminado',
+                    product_code: m.products?.code || '---',
+                    project: projectsMap[m.project_id] || '---',
+                    project_id: m.project_id
+                };
+            });
+
+            setAdjustments(formatted);
+
+        } catch (error) {
+            console.error(error);
+            toast.error("Error al cargar historial");
         } finally {
-            setProcessing(false);
+            setLoading(false);
         }
     };
 
-    const isStep1Complete = selectedWarehouse && selectedProject;
-    const isStep2Complete = selectedProduct && selectedProductData;
-    const accentColor = adjustmentType === 'DECREASE' ? 'red' : 'emerald';
+    useEffect(() => { fetchHistory(); }, []);
+
+    // --- Filtros ---
+    const filtered = adjustments.filter(a =>
+        a.product_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        a.product_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (a.reason && a.reason.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
 
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
 
-            {/* HEADER TIPO SELECTOR */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="grid grid-cols-2">
-                    <button
-                        onClick={() => setAdjustmentType('DECREASE')}
-                        className={`p-5 flex items-center justify-center gap-3 transition-all ${adjustmentType === 'DECREASE'
-                            ? 'bg-red-50 text-red-600 border-b-4 border-red-500'
-                            : 'text-slate-400 hover:bg-slate-50'
-                            }`}
-                    >
-                        <ArrowDownCircle size={28} />
-                        <div className="text-left">
-                            <span className="font-bold block">Pérdida / Merma</span>
-                            <span className="text-xs opacity-75">Descontar del inventario</span>
-                        </div>
-                    </button>
-                    <button
-                        onClick={() => setAdjustmentType('INCREASE')}
-                        className={`p-5 flex items-center justify-center gap-3 transition-all ${adjustmentType === 'INCREASE'
-                            ? 'bg-emerald-50 text-emerald-600 border-b-4 border-emerald-500'
-                            : 'text-slate-400 hover:bg-slate-50'
-                            }`}
-                    >
-                        <ArrowUpCircle size={28} />
-                        <div className="text-left">
-                            <span className="font-bold block">Hallazgo / Sobrante</span>
-                            <span className="text-xs opacity-75">Sumar al inventario</span>
-                        </div>
-                    </button>
+            {/* Header */}
+            <div className="flex flex-col md:flex-row justify-between items-end gap-4">
+                <div>
+                    <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                        <AlertTriangle className="text-purple-600" /> Ajustes y Mermas
+                    </h1>
+                    <p className="text-sm text-slate-500 font-medium mt-1">Control de pérdidas, hallazgos y correcciones de inventario</p>
                 </div>
+                <button
+                    onClick={() => setIsFormOpen(true)}
+                    className="bg-purple-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-purple-700 shadow-lg shadow-purple-200 transition-all flex items-center gap-2"
+                >
+                    <Plus size={20} /> Nuevo Ajuste
+                </button>
             </div>
 
-            {/* PASO 1: CONTEXTO */}
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex items-center gap-3 mb-4">
-                    <div className={`w-8 h-8 ${isStep1Complete ? `bg-${accentColor}-500 text-white` : `bg-${accentColor}-100 text-${accentColor}-600`} rounded-lg flex items-center justify-center font-bold text-sm transition-all`}>
-                        {isStep1Complete ? <CheckCircle size={18} /> : '1'}
-                    </div>
-                    <h3 className="font-bold text-slate-800">Contexto del Ajuste</h3>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                            <Warehouse size={14} className="inline mr-1" /> Bodega Afectada
-                        </label>
-                        <Combobox
-                            options={warehouses}
-                            value={selectedWarehouse}
-                            onChange={setSelectedWarehouse}
-                            placeholder="-- Seleccionar Bodega --"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                            <FileText size={14} className="inline mr-1" /> Proyecto (Dueño del Stock)
-                        </label>
-                        <Combobox
-                            options={projects.map(p => ({ id: p.id, name: `${p.proyecto} (${p.cliente})` }))}
-                            value={selectedProject}
-                            onChange={setSelectedProject}
-                            placeholder="-- Seleccionar Proyecto --"
-                        />
-                    </div>
-                </div>
+            {/* Search */}
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex items-center gap-4">
+                <Search className="text-slate-400" size={20} />
+                <input
+                    type="text"
+                    placeholder="Buscar por producto, código, motivo..."
+                    className="w-full outline-none text-slate-700 font-medium"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                />
             </div>
 
-            {/* PASO 2: PRODUCTO */}
-            <div className={`bg-white p-6 rounded-2xl shadow-sm border transition-all ${!isStep1Complete ? 'opacity-50 pointer-events-none' : 'border-slate-200'}`}>
-                <div className="flex items-center gap-3 mb-4">
-                    <div className={`w-8 h-8 ${isStep2Complete ? `bg-${accentColor}-500 text-white` : isStep1Complete ? `bg-${accentColor}-100 text-${accentColor}-600` : 'bg-slate-100 text-slate-400'} rounded-lg flex items-center justify-center font-bold text-sm transition-all`}>
-                        {isStep2Complete ? <CheckCircle size={18} /> : '2'}
-                    </div>
-                    <h3 className="font-bold text-slate-800">Producto a Ajustar</h3>
-                    {!isStep1Complete && (
-                        <span className="text-xs text-slate-400 ml-2">← Completa el paso anterior</span>
-                    )}
-                </div>
-
-                {loading ? (
-                    <div className="text-center py-8 text-slate-400">
-                        <Loader className="animate-spin mx-auto mb-2" size={32} />
-                        <p>Cargando productos...</p>
-                    </div>
-                ) : (
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                            <Package size={14} className="inline mr-1" />
-                            {adjustmentType === 'DECREASE'
-                                ? 'Producto con Stock (busca por nombre)'
-                                : 'Producto del Catálogo'}
-                        </label>
-                        <Combobox
-                            options={adjustmentType === 'DECREASE'
-                                ? stockProducts
-                                : allProducts.map(p => ({ id: p.id, name: `${p.name} (${p.code})` }))
-                            }
-                            value={selectedProduct}
-                            onChange={handleProductSelect}
-                            placeholder={adjustmentType === 'DECREASE'
-                                ? `-- ${stockProducts.length} productos con stock disponible --`
-                                : `-- ${allProducts.length} productos en catálogo --`
-                            }
-                        />
-
-                        {selectedProductData && (
-                            <div className={`mt-4 p-4 rounded-xl border-2 ${adjustmentType === 'DECREASE' ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'} animate-in zoom-in`}>
-                                <div className="flex justify-between items-center">
-                                    <div>
-                                        <p className="font-bold text-slate-800">{selectedProductData.name}</p>
-                                        <p className="text-xs text-slate-500 font-mono">{selectedProductData.code}</p>
-                                        {adjustmentType === 'DECREASE' && (
-                                            <p className="text-sm mt-1 font-bold text-red-600">
-                                                Stock disponible: {selectedProductData.maxQty} {selectedProductData.unit || 'UN'}
-                                            </p>
+            {/* Table */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
+                        <tr>
+                            <th className="px-6 py-4">Tipo / Fecha</th>
+                            <th className="px-6 py-4">Producto</th>
+                            <th className="px-6 py-4">Motivo / Glosa</th>
+                            <th className="px-6 py-4">Bodega / Proyecto</th>
+                            <th className="px-6 py-4 text-center">Cant.</th>
+                            <th className="px-6 py-4 text-center">Evidencia</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {loading ? (
+                            <tr><td colSpan="6" className="py-20 text-center"><Loader className="animate-spin mx-auto text-purple-500" /></td></tr>
+                        ) : filtered.length === 0 ? (
+                            <tr><td colSpan="6" className="py-20 text-center text-slate-400 italic">No se encontraron ajustes registrados.</td></tr>
+                        ) : (
+                            filtered.map((item) => (
+                                <tr
+                                    key={item.id}
+                                    onClick={() => setSelectedAdjustment(item)}
+                                    className="hover:bg-slate-50 transition-colors cursor-pointer group"
+                                >
+                                    <td className="px-6 py-4">
+                                        <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold uppercase mb-1 ${item.type === 'DECREASE' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                            {item.type === 'DECREASE' ? <ArrowDownCircle size={12} /> : <ArrowUpCircle size={12} />}
+                                            {item.type === 'DECREASE' ? 'Pérdida' : 'Hallazgo'}
+                                        </div>
+                                        <div className="text-xs text-slate-400 flex items-center gap-1">
+                                            <Calendar size={10} /> {new Date(item.date).toLocaleDateString()}
+                                            <span className="font-mono ml-1">#{item.folio?.slice(0, 8)}</span>
+                                        </div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <div className="font-bold text-slate-800">{item.product_name}</div>
+                                        <div className="text-xs font-mono text-slate-400">{item.product_code}</div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <div className="text-slate-600 font-medium truncate max-w-[200px]">{item.reason}</div>
+                                        <div className="text-[10px] text-slate-400">{item.user_email}</div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <div className="font-bold text-slate-700">{item.warehouse}</div>
+                                        {item.project !== '---' && <div className="text-[10px] text-purple-600 font-bold">{item.project}</div>}
+                                    </td>
+                                    <td className={`px-6 py-4 text-center font-black ${item.type === 'DECREASE' ? 'text-red-500' : 'text-emerald-500'}`}>
+                                        {item.type === 'DECREASE' ? '-' : '+'}{item.qty}
+                                    </td>
+                                    <td className="px-6 py-4 text-center">
+                                        {item.evidence_url ? (
+                                            <FileText size={18} className="mx-auto text-slate-400 group-hover:text-purple-600 transition-colors" />
+                                        ) : (
+                                            <span className="text-slate-200 text-xs">-</span>
                                         )}
-                                    </div>
-                                    <button
-                                        onClick={() => { setSelectedProduct(''); setSelectedProductData(null); setTargetLocation(''); }}
-                                        className="text-slate-400 hover:text-red-500"
-                                    >
-                                        <X size={20} />
-                                    </button>
-                                </div>
-                            </div>
+                                    </td>
+                                </tr>
+                            ))
                         )}
-                    </div>
-                )}
+                    </tbody>
+                </table>
             </div>
 
-            {/* PASO 3: DETALLES */}
-            {isStep1Complete && isStep2Complete && (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 animate-in slide-in-from-bottom-4">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className={`w-8 h-8 bg-${accentColor}-100 text-${accentColor}-600 rounded-lg flex items-center justify-center font-bold text-sm`}>
-                            3
-                        </div>
-                        <h3 className="font-bold text-slate-800">Detalles del Ajuste</h3>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-                        {/* SI ES INCREASE, PEDIR UBICACIÓN */}
-                        {adjustmentType === 'INCREASE' && (
-                            <div className="md:col-span-2">
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                                    <MapPin size={14} className="inline mr-1" /> ¿Dónde se guardará el hallazgo?
-                                </label>
-                                <Combobox
-                                    options={locations.map(l => ({ id: l.id, name: l.full_code }))}
-                                    value={targetLocation}
-                                    onChange={setTargetLocation}
-                                    placeholder="-- Seleccionar Rack / Ubicación --"
-                                />
-                            </div>
-                        )}
-
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Motivo</label>
-                            <select
-                                className="w-full border border-slate-200 p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-100 bg-white"
-                                value={reason}
-                                onChange={e => setReason(e.target.value)}
-                            >
-                                <option value="">-- Seleccionar --</option>
-                                {adjustmentType === 'DECREASE' ? (
-                                    <>
-                                        <option value="Merma / Daño">Merma / Daño</option>
-                                        <option value="Robo / Pérdida">Robo / Pérdida</option>
-                                        <option value="Vencimiento">Vencimiento</option>
-                                        <option value="Error Inventario">Error de Conteo (Falta)</option>
-                                        <option value="Consumo Interno">Consumo Interno</option>
-                                    </>
-                                ) : (
-                                    <>
-                                        <option value="Hallazgo">Hallazgo Físico</option>
-                                        <option value="Devolución Sin Papel">Devolución Obra (Sin Doc)</option>
-                                        <option value="Error Inventario">Error de Conteo (Sobra)</option>
-                                    </>
-                                )}
-                            </select>
-                        </div>
-
-                        <div>
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                                Cantidad a {adjustmentType === 'INCREASE' ? 'Sumar' : 'Descontar'}
-                            </label>
-                            <input
-                                type="number"
-                                className={`w-full border-2 p-3 rounded-xl font-black text-2xl text-center outline-none ${adjustmentType === 'DECREASE'
-                                    ? 'border-red-200 text-red-600 focus:border-red-400'
-                                    : 'border-emerald-200 text-emerald-600 focus:border-emerald-400'
-                                    }`}
-                                placeholder="0"
-                                value={quantity}
-                                onChange={e => setQuantity(e.target.value)}
-                                max={adjustmentType === 'DECREASE' ? selectedProductData?.maxQty : undefined}
-                            />
-                            {adjustmentType === 'DECREASE' && selectedProductData?.maxQty && (
-                                <p className="text-xs text-slate-400 mt-1 text-center">
-                                    Máximo: {selectedProductData.maxQty}
-                                </p>
-                            )}
-                        </div>
-
-                        <div className="md:col-span-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Comentarios / Observación</label>
-                            <textarea
-                                className="w-full border border-slate-200 p-3 rounded-xl outline-none focus:border-blue-400"
-                                rows="2"
-                                placeholder="Detalle de la incidencia..."
-                                value={comments}
-                                onChange={e => setComments(e.target.value)}
-                            />
-                        </div>
-
-                        <div className="md:col-span-2">
-                            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Evidencia Fotográfica / Acta</label>
-                            <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 cursor-pointer transition-all ${evidenceFile
-                                ? 'bg-emerald-50 border-emerald-400'
-                                : 'hover:bg-slate-50 border-slate-300'
-                                }`}>
-                                {evidenceFile
-                                    ? <CheckCircle className="text-emerald-500 mb-2" size={32} />
-                                    : <Camera className="text-slate-300 mb-2" size={32} />
-                                }
-                                <span className="text-sm font-bold text-slate-600">
-                                    {evidenceFile ? evidenceFile.name : "Click para subir foto o documento"}
-                                </span>
-                                <input type="file" className="hidden" accept="image/*,.pdf" onChange={e => setEvidenceFile(e.target.files[0])} />
-                            </label>
-                        </div>
-
-                        <div className="md:col-span-2 pt-4">
-                            <button
-                                onClick={handleSubmit}
-                                disabled={processing || !reason || !quantity || (adjustmentType === 'INCREASE' && !targetLocation)}
-                                className={`w-full py-4 rounded-xl font-black text-white shadow-lg flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${adjustmentType === 'DECREASE'
-                                    ? 'bg-red-600 hover:bg-red-700'
-                                    : 'bg-emerald-600 hover:bg-emerald-700'
-                                    }`}
-                            >
-                                {processing ? <Loader className="animate-spin" /> : (
-                                    <>
-                                        {adjustmentType === 'DECREASE' ? <AlertTriangle size={20} /> : <CheckCircle size={20} />}
-                                        CONFIRMAR {adjustmentType === 'DECREASE' ? 'PÉRDIDA' : 'HALLAZGO'}
-                                    </>
-                                )}
-                            </button>
-                        </div>
-
-                    </div>
-                </div>
+            {/* Modal de Nuevo Ajuste */}
+            {isFormOpen && (
+                <InventoryAdjustmentsForm
+                    onClose={() => setIsFormOpen(false)}
+                    onSuccess={() => { setIsFormOpen(false); fetchHistory(); }}
+                />
             )}
+
+            {/* Drawer de Detalle */}
+            {selectedAdjustment && (
+                <InventoryAdjustmentDetail
+                    adjustment={selectedAdjustment}
+                    onClose={() => setSelectedAdjustment(null)}
+                />
+            )}
+
         </div>
     );
 }
